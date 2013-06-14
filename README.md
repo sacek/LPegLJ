@@ -24,6 +24,6 @@ Need LuaJIT 2.x
 *Diferences from LPEG:
 
 Because patterns in LPegLJ are standard tables (not userdata) # prefix (for positive look-ahead pattern) not work (in Lua 5.1).
-#prefix (positive look-ahead) should be replaced by L(pattern) or you can use LuaJIT compiled with
+Prefix #(positive look-ahead) should be replaced by L(pattern) or you can use LuaJIT compiled with
 Lua 5.2 compability flag (LUAJIT_ENABLE_LUA52COMPAT)
 
