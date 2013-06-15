@@ -1052,10 +1052,10 @@ metareg = {
 local LUA52LEN = not #setmetatable({},{__len = function()end})
 
 local PROXIES = pcall(function()
-    local prox, mt = newproxy(), {}
-    assert(type(prox) == "userdata")
-    debug.setmetatable(prox, mt)
-    assert(getmetatable(prox) == mt)
+    local prox = newproxy(true)
+    local prox2 = newproxy(prox)
+    assert (type(getmetatable(prox)) == "table" 
+            and (getmetatable(prox)) == (getmetatable(prox2)))
 end)
 
 if PROXIES and not LUA52LEN then
