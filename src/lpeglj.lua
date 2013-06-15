@@ -96,6 +96,9 @@ local PEnofail = 1
 
 local newgrammar
 local metareg
+local maketree
+local get_concrete_tree
+
 
 -- number of siblings for each tree
 local numsiblings = {
@@ -194,7 +197,7 @@ end
 -- =======================================================
 
 local function gettree(val)
-    if type(val) == 'table' and getmetatable(val) == metareg then
+    if getmetatable(val) == metareg then
         return val
     end
 end
@@ -203,13 +206,13 @@ end
 -- create a pattern
 
 local function newtree(len)
-    local tree = setmetatable({}, metareg)
+    local tree = {}
     tree.code = nil
     tree.size = len
     for i = 1, len do
         tree[i] = {}
     end
-    return tree
+    return maketree(tree)
 end
 
 
@@ -1033,5 +1036,67 @@ metareg = {
     ["__sub"] = lp_sub,
     ["__index"] = pattreg
 }
+
+
+-- =======================================================
+-- Enable `#pattern` in more cases
+-- =======================================================
+
+-- The following code allows to use the #pattern syntax
+-- even when LuaJIT has not been compiled with
+-- `-DLUAJIT_ENABLE_LUA52COMPAT`. It relies on `newproxy()`
+-- and `debug.setmetatable()`. When either is absent or
+-- non-functional, `#pattern` is disabled, and `L(pattern)`
+-- must be used instead.
+
+local LUA52LEN = not #setmetatable({},{__len = function()end})
+
+local PROXIES = pcall(function()
+    local prox = newproxy(true)
+    local prox2 = newproxy(prox)
+    assert (type(getmetatable(prox)) == "table" 
+            and (getmetatable(prox)) == (getmetatable(prox2)))
+end)
+
+if PROXIES and not LUA52LEN then
+    local proxycache = setmetatable({}, {__mode = "k"})
+    local __index_pattreg = {__index = pattreg}
+    local metareg_ = metareg
+    local baseproxy = newproxy (true)
+    metareg = getmetatable(baseproxy)
+
+    for k, v in pairs(metareg_) do
+        metareg[k] = v
+    end
+
+    function metareg:__index(k)
+        return proxycache[self][k]
+    end
+
+    function metareg:__newindex(k, v)
+        proxycache[self][k] = v
+    end
+
+    function maketree(cons)
+        local pt = newproxy(baseproxy)
+        setmetatable(cons, __index_pattreg)
+        proxycache[pt]=cons
+        return pt
+    end
+
+    -- Gives access to the table hidden behind the proxy.
+    function get_concrete_tree(p) return proxycache[p] end
+else
+    -- LUA52LEN or restricted sandbox:
+    -- if not LUA52LEN then
+    --     print("Warning: The `__len` metatethod won't work with patterns, "
+    --         .."use `L(pattern)` insetad of `#pattern`for lookaheads.")
+    -- end
+    function maketree(pt)
+        return setmetatable(pt, metareg)
+    end
+    -- present for compatibility with the proxy mode.
+    function get_concrete_tree (p) return p end
+end
 
 return pattreg
