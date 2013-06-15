@@ -1059,24 +1059,31 @@ local PROXIES = pcall(function()
 end)
 
 if PROXIES and not LUA52LEN then
-    -- Lua 5.2compatibiloty disabled
-    local d_setmetatable = debug.setmetatable
-
     local proxycache = setmetatable({}, {__mode = "k"})
     local __index_pattreg = {__index = pattreg}
-    function maketree(cons)
-        local pt = newproxy()
-        setmetatable(cons, __index_pattreg)
-        proxycache[pt]=cons
-        d_setmetatable(pt, metareg)
-        return pt
+    local metareg_ = metareg
+    local baseproxy = newproxy (true)
+    metareg = getmetatable(baseproxy)
+
+    for k, v in pairs(metareg_) do
+        metareg[k] = v
     end
+
     function metareg:__index(k)
         return proxycache[self][k]
     end
+
     function metareg:__newindex(k, v)
         proxycache[self][k] = v
     end
+
+    function maketree(cons)
+        local pt = newproxy(baseproxy)
+        setmetatable(cons, __index_pattreg)
+        proxycache[pt]=cons
+        return pt
+    end
+
     -- Gives access to the table hidden behind the proxy.
     function get_concrete_tree(p) return proxycache[p] end
 else
