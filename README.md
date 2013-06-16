@@ -7,20 +7,24 @@ based on LPeg v.12 - PEG pattern matching for Lua
 Lua.org & PUC-Rio  written by Roberto Ierusalimschy  
 http://www.inf.puc-rio.br/~roberto/lpeg/  
 
-*Usage:  
-
+### Usage:  
+```Lua
 local lpeglj = require"lpeglj"  
-local pattern = lpeglj.P("a")    
-lpeglj.match(pattern, "a")    
-or  
+local pattern = lpeglj.P("a") 
+-- then:
+lpeglj.match(pattern, "a") 
+-- or, equivalently:  
 pattern:match("a")  
+```
 
-*Compatibility:
+### Compatibility:
 
 -full syntactical and functional compatibility with LPeg v.12   
 -need LuaJIT 2.x  
 
-*Diferences from LPeg v.12:
+### Diferences from LPeg v.12:
 
-Input parameter (subject string) for match function can be string or table with defined
-functions len and sub (is possible use coroutine.yield for input data).
+The `#pattern` syntax for lookaheds relies on either the availability of 
+`newproxy()` (present by default) or on the `LUAJIT_ENABLE_LUA52COMPAT`
+compile flag. If neither is present (in a restricted sandbox,
+for example), you can use `lpeglj.L(pattern)` instead.
