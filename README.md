@@ -28,7 +28,7 @@ Need LuaJIT 2.x
 
 ### Diferences from LPEG:
 
-The `#pattern` syntax relies on either the availability of 
+The `#pattern` syntax for lookaheds relies on either the availability of 
 `newproxy()` (present by default) or on the `LUAJIT_ENABLE_LUA52COMPAT` 
 compile flag. If neither is present (in a restricted sandbox, 
-for example), you can use `lpeg.L(pattern)` instead.
+for example), you can use `lpeglj.L(pattern)` instead.
