@@ -9,21 +9,26 @@ based on LPeg v0.12 - PEG pattern matching for Lua
 Lua.org & PUC-Rio  written by Roberto Ierusalimschy
 http://www.inf.puc-rio.br/~roberto/lpeg/
 
-*Usage:
+### Usage:
 
+```Lua
 local lpeglj = require"lpeglj"
 
 local pattern = lpeglj.P("a")
-lpeglj.match(pattern, "a")
-or
-pattern:match("a")
 
-*Compatibility:
+-- then:
+lpeglj.match(pattern, "a")
+
+-- or, equivalently:
+pattern:match("a")
+```
+
+### Compatibility:
 Need LuaJIT 2.x
 
-*Diferences from LPEG:
+### Diferences from LPEG:
 
-Because patterns in LPegLJ are standard tables (not userdata) # prefix (for positive look-ahead pattern) not work (in Lua 5.1).
-Prefix #(positive look-ahead) should be replaced by L(pattern) or you can use LuaJIT compiled with
-Lua 5.2 compability flag (LUAJIT_ENABLE_LUA52COMPAT)
-
+The `#pattern` syntax for lookaheds relies on either the availability of 
+`newproxy()` (present by default) or on the `LUAJIT_ENABLE_LUA52COMPAT` 
+compile flag. If neither is present (in a restricted sandbox, 
+for example), you can use `lpeglj.L(pattern)` instead.
