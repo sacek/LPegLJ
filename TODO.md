@@ -1,2 +1,8 @@
+### Speed:
+- improve speed of VM
 
-### Improve speed
+### Paterns:
+- loading and saving patterns
+
+### Captures:
+- getting and removing captures during parsing (for infinite parsing)
