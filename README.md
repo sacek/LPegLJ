@@ -19,10 +19,10 @@ pattern:match("a")
 
 ### Compatibility:
 
--full syntactical and functional compatibility with LPeg v.12   
--need LuaJIT 2.x  
+- full syntactical and functional compatibility with LPeg v.12   
+- need LuaJIT 2.x  
 
-### Diferences from LPeg v.12:
+### Differences from LPeg v.12:
 
 The `#pattern` syntax for lookaheds relies on either the availability of 
 `newproxy()` (present by default) or on the `LUAJIT_ENABLE_LUA52COMPAT`
