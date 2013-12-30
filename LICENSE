@@ -1,5 +1,6 @@
 ** Modules:
 ** lpcap.lua, lpcode.lua, lpeglj.lua, lpprint.lua, lpvm.lua
+** testlr.lua
 ** Copyright (C) 2013 Rostislav Sacek.
 **
 ** Modules:

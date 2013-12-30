@@ -1,11 +1,14 @@
-LPegLJ
-======
+LPegLJ v.20
+===========
 
 LPeg Parser in pure LuaJIT  
 (straight Lua + FFI translation of LPeg C code)   
 based on LPeg v.12 - PEG pattern matching for Lua  
 Lua.org & PUC-Rio  written by Roberto Ierusalimschy  
-http://www.inf.puc-rio.br/~roberto/lpeg/  
+http://www.inf.puc-rio.br/~roberto/lpeg/
+
+left recursion support is based on Sérgio Medeiros algorithm
+http://arxiv.org/abs/1207.0443
 
 ### Usage:  
 ```Lua
@@ -19,12 +22,10 @@ pattern:match("a")
 
 ### Compatibility:
 
-- full syntactical and functional compatibility with LPeg v.12   
+- full syntactical and functional backward compatibility with LPeg v.12
 - need LuaJIT 2.x  
 
 ### Differences from LPeg v.12:
 
-The `#pattern` syntax for lookaheds relies on either the availability of 
-`newproxy()` (present by default) or on the `LUAJIT_ENABLE_LUA52COMPAT`
-compile flag. If neither is present (in a restricted sandbox,
-for example), you can use `lpeglj.L(pattern)` instead.
+- LPegLJ supports direct and indirect left recursion based on Sérgio Medeiros algorithm (http://arxiv.org/abs/1207.0443)
+- patterns can be saved and loaded

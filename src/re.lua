@@ -12,6 +12,7 @@ local mm = m
 
 -- pattern's metatable
 local mt = getmetatable(mm.P(0))
+mt = m.version() == "0.20LJ" and m or mt
 
 
 

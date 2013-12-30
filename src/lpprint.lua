@@ -36,6 +36,7 @@ ffi.cdef[[
   int isprint ( int c );
 ]]
 
+local RuleLR = 0x8000
 
 -- {======================================================
 -- Printing patterns (for debugging)
@@ -84,19 +85,62 @@ local IOpenCapture = 21 -- start a capture
 local ICloseCapture = 22
 local ICloseRunTime = 23
 
+local Cclose = 0
+local Cposition = 1
+local Cconst = 2
+local Cbackref = 3
+local Carg = 4
+local Csimple = 5
+local Ctable = 6
+local Cfunction = 7
+local Cquery = 8
+local Cstring = 9
+local Cnum = 10
+local Csubst = 11
+local Cfold = 12
+local Cruntime = 13
+local Cgroup = 14
+
 
 -- number of siblings for each tree
 local numsiblings = {
-    0, 0, 0, -- char, set, any
-    0, 0, -- true, false
-    1, -- rep
-    2, 2, -- seq, choice
-    1, 1, -- not, and
-    0, 0, 2, 1, -- call, opencall, rule, grammar
-    1, -- behind
-    1, 1 -- capture, runtime capture
+    [TRep] = 1,
+    [TSeq] = 2,
+    [TChoice] = 2,
+    [TNot] = 1,
+    [TAnd] = 1,
+    [TRule] = 2,
+    [TGrammar] = 1,
+    [TBehind] = 1,
+    [TCapture] = 1,
+    [TRunTime] = 1,
 }
-
+local names = {
+    [IAny] = "any",
+    [IChar] = "char",
+    [ISet] = "set",
+    [ITestAny] = "testany",
+    [ITestChar] = "testchar",
+    [ITestSet] = "testset",
+    [ISpan] = "span",
+    [IBehind] = "behind",
+    [IRet] = "ret",
+    [IEnd] = "end",
+    [IChoice] = "choice",
+    [IJmp] = "jmp",
+    [ICall] = "call",
+    [IOpenCall] = "open_call",
+    [ICommit] = "commit",
+    [IPartialCommit] = "partial_commit",
+    [IBackCommit] = "back_commit",
+    [IFailTwice] = "failtwice",
+    [IFail] = "fail",
+    [IGiveup] = "giveup",
+    [IFullCapture] = "fullcapture",
+    [IOpenCapture] = "opencapture",
+    [ICloseCapture] = "closecapture",
+    [ICloseRunTime] = "closeruntime"
+}
 
 local function printcharset(st)
     io.write("[");
@@ -116,53 +160,54 @@ local function printcharset(st)
     io.write("]")
 end
 
+local modes = {
+    [Cclose] = "close",
+    [Cposition] = "position",
+    [Cconst] = "constant",
+    [Cbackref] = "backref",
+    [Carg] = "argument",
+    [Csimple] = "simple",
+    [Ctable] = "table",
+    [Cfunction] = "function",
+    [Cquery] = "query",
+    [Cstring] = "string",
+    [Cnum] = "num",
+    [Csubst] = "substitution",
+    [Cfold] = "fold",
+    [Cruntime] = "runtime",
+    [Cgroup] = "group"
+}
 
 local function printcapkind(kind)
-    local modes = {
-        "close", "position", "constant", "backref",
-        "argument", "simple", "table", "function",
-        "query", "string", "num", "substitution", "fold",
-        "runtime", "group"
-    };
-    io.write(("%s"):format(modes[kind + 1]))
+    io.write(("%s"):format(modes[kind]))
 end
-
 
 local function printjmp(p, index)
-    io.write(("-> %d"):format(index + p[index].offset - 1))
+    io.write(("-> %d"):format(index + p[index].offset))
 end
 
 
-local function printinst(p, index)
-    local names = {
-        "any", "char", "set",
-        "testany", "testchar", "testset",
-        "span", "behind",
-        "ret", "end",
-        "choice", "jmp", "call", "open_call",
-        "commit", "partial_commit", "back_commit", "failtwice", "fail", "giveup",
-        "fullcapture", "opencapture", "closecapture", "closeruntime"
-    }
+local function printinst(p, index, valuetable)
     local code = p[index].code
-    io.write(("%02d: %s "):format(index - 1, names[code + 1]))
+    io.write(("%02d: %s "):format(index, names[code]))
     if code == IChar then
-        io.write(("'%s'"):format(p[index].val))
+        io.write(("'%s'"):format(string.char(p[index].val)))
     elseif code == ITestChar then
-        io.write(("'%s'"):format(p[index].val))
+        io.write(("'%s'"):format(string.char(p[index].val)))
         printjmp(p, index)
     elseif code == IFullCapture then
         printcapkind(band(p[index].val, 0x0f));
-        io.write((" (size = %d)  (idx = %s)"):format(band(rshift(p[index].val, 4), 0xF), tostring(p[index].offset)))
+        io.write((" (size = %d)  (idx = %s)"):format(band(rshift(p[index].val, 4), 0xF), tostring(valuetable[p[index].offset])))
     elseif code == IOpenCapture then
         printcapkind(band(p[index].val, 0x0f))
-        io.write((" (idx = %s)"):format(tostring(p[index].offset)))
+        io.write((" (idx = %s)"):format(tostring(valuetable[p[index].offset])))
     elseif code == ISet then
-        printcharset(p[index].val);
+        printcharset(valuetable[p[index].val]);
     elseif code == ITestSet then
-        printcharset(p[index].val)
+        printcharset(valuetable[p[index].val])
         printjmp(p, index);
     elseif code == ISpan then
-        printcharset(p[index].val);
+        printcharset(valuetable[p[index].val]);
     elseif code == IOpenCall then
         io.write(("-> %d"):format(p[index].offset))
     elseif code == IBehind then
@@ -175,24 +220,24 @@ local function printinst(p, index)
 end
 
 
-local function printpatt(p)
-    for i = 1, #p do
-        printinst(p, i);
+local function printpatt(p, valuetable)
+    for i = 0, p.size - 1 do
+        printinst(p.p, i, valuetable);
     end
 end
 
 
-local function printcap(cap, index)
+local function printcap(cap, index, valuetable)
     printcapkind(cap[index].kind)
-    io.write((" (idx: %s - size: %d) -> %d\n"):format(tostring(cap[index].idx), cap[index].siz, cap[index].s))
+    io.write((" (idx: %s - size: %d) -> %d\n"):format(valuetable[cap[index].idx], cap[index].siz, cap[index].s))
 end
 
 
-local function printcaplist(cap, limit)
+local function printcaplist(cap, limit, valuetable)
     io.write(">======\n")
-    local index = 1
+    local index = 0
     while cap[index].s and index < limit do
-        printcap(cap, index)
+        printcap(cap, index, valuetable)
         index = index + 1
     end
     io.write("=======\n")
@@ -207,60 +252,70 @@ end
 -- =======================================================
 
 local tagnames = {
-    "char", "set", "any",
-    "true", "false",
-    "rep",
-    "seq", "choice",
-    "not", "and",
-    "call", "opencall", "rule", "grammar",
-    "behind",
-    "capture", "run-time"
+    [TChar] = "char",
+    [TSet] = "set",
+    [TAny] = "any",
+    [TTrue] = "true",
+    [TFalse] = "false",
+    [TRep] = "rep",
+    [TSeq] = "seq",
+    [TChoice] = "choice",
+    [TNot] = "not",
+    [TAnd] = "and",
+    [TCall] = "call",
+    [TOpenCall] = "opencall",
+    [TRule] = "rule",
+    [TGrammar] = "grammar",
+    [TBehind] = "behind",
+    [TCapture] = "capture",
+    [TRunTime] = "run-time"
 }
 
 
-local function printtree(tree, ident, index)
+local function printtree(tree, ident, index, valuetable)
     for i = 1, ident do
         io.write(" ")
     end
-    io.write(("%s"):format(tagnames[tree[index].tag + 1]))
     local tag = tree[index].tag
+    io.write(("%s"):format(tagnames[tag]))
     if tag == TChar then
-        local c = tree[index].val:byte()
+        local c = tree[index].val
         if ffi.C.isprint(c) then
             io.write((" '%c'\n"):format(c))
         else
             io.write((" (%02X)\n"):format(c))
         end
     elseif tag == TSet then
-        printcharset(tree[index].val);
+        printcharset(valuetable[tree[index].val]);
         io.write("\n")
     elseif tag == TOpenCall or tag == TCall then
-        io.write((" key: %s\n"):format(tostring(tree[index].val)))
+        io.write((" key: %s\n"):format(tostring(valuetable[tree[index].val])))
     elseif tag == TBehind then
         io.write((" %d\n"):format(tree[index].val))
-        printtree(tree, ident + 2, index + 1);
+        printtree(tree, ident + 2, index + 1, valuetable);
     elseif tag == TCapture then
-        io.write((" cap: %d   n: %s\n"):format(tree[index].cap, tree[index].val))
-        printtree(tree, ident + 2, index + 1);
+        io.write((" cap: %s   n: %s\n"):format(modes[tree[index].cap], valuetable[tree[index].val]))
+        printtree(tree, ident + 2, index + 1, valuetable);
     elseif tag == TRule then
-        io.write((" n: %d  key: %s\n"):format(tree[index].cap - 1, tree[index].val))
-        printtree(tree, ident + 2, index + 1);
+        local lr = bit.band(tree[index].cap, RuleLR) == RuleLR and 'left recursive' or ''
+        io.write((" n: %d  key: %s %s\n"):format(bit.band(tree[index].cap, bit.bnot(RuleLR)) - 1, valuetable[tree[index].val], lr))
+        printtree(tree, ident + 2, index + 1, valuetable);
         -- do not print next rule as a sibling
     elseif tag == TGrammar then
         local ruleindex = index + 1
         io.write((" %d\n"):format(tree[index].val)) -- number of rules
         for i = 1, tree[index].val do
-            printtree(tree, ident + 2, ruleindex);
+            printtree(tree, ident + 2, ruleindex, valuetable);
             ruleindex = ruleindex + tree[ruleindex].ps
         end
         assert(tree[ruleindex].tag == TTrue); -- sentinel
     else
-        local sibs = numsiblings[tree[index].tag + 1]
+        local sibs = numsiblings[tree[index].tag] or 0
         io.write("\n")
         if sibs >= 1 then
-            printtree(tree, ident + 2, index + 1);
+            printtree(tree, ident + 2, index + 1, valuetable);
             if sibs >= 2 then
-                printtree(tree, ident + 2, index + tree[index].ps)
+                printtree(tree, ident + 2, index + tree[index].ps, valuetable)
             end
         end
     end

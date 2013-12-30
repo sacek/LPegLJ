@@ -33,6 +33,7 @@ end
 
 
 local mt = getmetatable(m.P(1))
+mt = m.version() == "0.20LJ" and m or mt
 
 
 local allchar = {}
@@ -282,7 +283,7 @@ assert(m.match(m.P"ab"^-1 - "c", "abcd") == 3)
 
 p = ('Aa' * ('Bb' * ('Cc' * m.P'Dd'^0)^0)^0)^-1
 assert(p:match("AaBbCcDdBbCcDdDdDdBb") == 21)
- 
+
 
 pi = "3.14159 26535 89793 23846 26433 83279 50288 41971 69399 37510"
 assert(m.match(m.Cs((m.P"1" / "a" + m.P"5" / "b" + m.P"9" / "c" + 1)^0), pi) ==
@@ -763,7 +764,7 @@ s = string.rep('a', l) .. string.rep('b', l) .. string.rep('c', l)
 p = (m.C(m.P'a'^1) * m.C(m.P'b'^1) * m.C(m.P'c'^1)) / '%3%2%1'
 
 assert(p:match(s) == string.rep('c', l) ..
-                     string.rep('b', l) .. 
+                     string.rep('b', l) ..
                      string.rep('a', l))
 
 print"+"
@@ -948,8 +949,8 @@ assert(#x == 500)
 local function id(s, i, x)
   if x == 'a' then return i, 1, 3, 7
   else return nil, 2, 4, 6, 8
-  end   
-end     
+  end
+end
 
 p = ((m.P(id) * 1 + m.Cmt(2, id) * 1  + m.Cmt(1, id) * 1))^0
 assert(table.concat{p:match('abababab')} == string.rep('137', 4))
@@ -1017,6 +1018,7 @@ assert(p == 'alo')
 
 
 -- ensure that failed match-time captures are not kept on Lua stack
+if m.version() ~= "0.20LJ" then -- results are placed in value table not on stack
 do
   local t = {__mode = "kv"}; setmetatable(t,t)
   local c = 0
@@ -1033,6 +1035,7 @@ do
   local p = m.P{ m.Cmt(0, foo) * m.P(false) + m.P(1) * m.V(1) + m.P"" }
   p:match(string.rep('1', 10))
   assert(c == 11)
+end
 end
 
 p = (m.P(function () return true, "a" end) * 'a'

@@ -28,7 +28,6 @@ http://www.inf.puc-rio.br/~roberto/lpeg/
 **
 ** [ MIT license: http://www.opensource.org/licenses/mit-license.php ]
 --]]
-
 local ffi = require"ffi"
 
 local band, bor, bnot, rshift, lshift = bit.band, bit.bor, bit.bnot, bit.rshift, bit.lshift
@@ -97,13 +96,15 @@ local Cgroup = 14
 
 local PEnullable = 0
 local PEnofail = 1
-local NOINST = -1
+local RuleLR = 0x8000
+local NOINST = -2
 
 
 local MAXBEHIND = 255
 local MAXRULES = 200
 local MAXOFF = 0xF
 
+-- number of siblings for each tree
 local numsiblings = {
     0, 0, 0, -- char, set, any
     0, 0, -- true, false
@@ -116,13 +117,30 @@ local numsiblings = {
 }
 
 
-local fullset = ffi.new('uint32_t[8]', { 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, })
+ffi.cdef[[
+  typedef struct {
+                  int code;
+                  int val;
+                  int offset;
+                  int fill;
+                 } PATTERN_ELEMENT;
+  typedef struct {
+                  int allocsize;
+                  int size;
+                  PATTERN_ELEMENT *p;
+                 } PATTERN;
+]]
+
+local patternelement = ffi.typeof('PATTERN_ELEMENT')
+local pattern = ffi.typeof('PATTERN')
+local settype = ffi.typeof('int32_t[8]')
+local fullset = settype(-1, -1, -1, -1, -1, -1, -1, -1)
 
 -- {======================================================
 -- Analysis and some optimizations
 -- =======================================================
 
-local function codegen(code, tree, fl, opt, tt, index) end
+local codegen
 
 
 -- Check whether a charset is empty (IFail), singleton (IChar),
@@ -137,7 +155,7 @@ local function charsettype(cs)
             if count > 1 then
                 return ISet; -- else set is still empty
             end
-        elseif b == 0xFFFFFFFF then
+        elseif b == -1 then
             if count < (i * 32) then
                 return ISet;
             else
@@ -166,7 +184,7 @@ local function charsettype(cs)
             end
             b = rshift(b, 1)
         end
-        return IChar, string.char(c)
+        return IChar, c
     elseif count == 256 then
         return IAny, 0 -- full set
     else
@@ -208,19 +226,19 @@ end
 
 -- Convert a 'char' pattern (TSet, TChar, TAny) to a charset
 
-local function tocharset(tree, index)
-    local val = ffi.new('uint32_t[8]')
-    if tree[index].tag == TSet then
-        ffi.copy(val, tree[index].val, 32)
+local function tocharset(tree, index, valuetable)
+    local val = settype()
+    if tree.p[index].tag == TSet then
+        ffi.copy(val, valuetable[tree.p[index].val], ffi.sizeof(val))
         return val
-    elseif tree[index].tag == TChar then
-        local b = tree[index].val:byte()
+    elseif tree.p[index].tag == TChar then
+        local b = tree.p[index].val
         -- only one char
         -- add that one
         val[rshift(b, 5)] = lshift(1, band(b, 31))
         return val
-    elseif tree[index].tag == TAny then
-        ffi.fill(val, 32, 0xff)
+    elseif tree.p[index].tag == TAny then
+        ffi.fill(val, ffi.sizeof(val), 0xff)
         return val
     end
 end
@@ -229,10 +247,10 @@ end
 -- checks whether a pattern has captures
 
 local function hascaptures(tree, index)
-    if tree[index].tag == TCapture or tree[index].tag == TRunTime then
+    if tree.p[index].tag == TCapture or tree.p[index].tag == TRunTime then
         return true
     else
-        local ns = numsiblings[tree[index].tag + 1]
+        local ns = numsiblings[tree.p[index].tag + 1]
         if ns == 0 then
             return
         elseif ns == 1 then
@@ -241,7 +259,7 @@ local function hascaptures(tree, index)
             if hascaptures(tree, index + 1) then
                 return true
             else
-                return hascaptures(tree, index + tree[index].ps)
+                return hascaptures(tree, index + tree.p[index].ps)
             end
         else
             assert(false)
@@ -267,7 +285,7 @@ end
 -- TRunTime is an arbitrary choice.)
 
 local function checkaux(tree, pred, index)
-    local tag = tree[index].tag
+    local tag = tree.p[index].tag
     if tag == TChar or tag == TSet or tag == TAny or
             tag == TFalse or tag == TOpenCall then
         return -- not nullable
@@ -297,18 +315,21 @@ local function checkaux(tree, pred, index)
         if not checkaux(tree, pred, index + 1) then
             return
         else
-            return checkaux(tree, pred, index + tree[index].ps)
+            return checkaux(tree, pred, index + tree.p[index].ps)
         end
     elseif tag == TChoice then
-        if checkaux(tree, pred, index + tree[index].ps) then
+        if checkaux(tree, pred, index + tree.p[index].ps) then
             return true
         else
             return checkaux(tree, pred, index + 1)
         end
     elseif tag == TCapture or tag == TGrammar or tag == TRule then
         return checkaux(tree, pred, index + 1)
-    elseif tag == TCall then
-        return checkaux(tree, pred, index + tree[index].ps)
+    elseif tag == TCall then -- OK
+        if tree.p[index].cap ~= 0 then
+            return
+        end
+        return checkaux(tree, pred, index + tree.p[index].ps)
     else
         assert(false)
     end
@@ -319,7 +340,7 @@ end
 -- ('count' avoids infinite loops for grammars)
 
 local function fixedlenx(tree, count, len, index)
-    local tag = tree[index].tag
+    local tag = tree.p[index].tag
     if tag == TChar or tag == TSet or tag == TAny then
         return len + 1;
     elseif tag == TFalse or tag == TTrue or tag == TNot or tag == TAnd or tag == TBehind then
@@ -332,19 +353,19 @@ local function fixedlenx(tree, count, len, index)
         if count >= MAXRULES then
             return -1; -- may be a loop
         else
-            return fixedlenx(tree, count + 1, len, index + tree[index].ps)
+            return fixedlenx(tree, count + 1, len, index + tree.p[index].ps)
         end
     elseif tag == TSeq then
         len = fixedlenx(tree, count, len, index + 1)
         if (len < 0) then
             return -1;
         else
-            return fixedlenx(tree, count, len, index + tree[index].ps)
+            return fixedlenx(tree, count, len, index + tree.p[index].ps)
         end
     elseif tag == TChoice then
         local n1 = fixedlenx(tree, count, len, index + 1)
         if n1 < 0 then return -1 end
-        local n2 = fixedlenx(tree, count, len, index + tree[index].ps)
+        local n2 = fixedlenx(tree, count, len, index + tree.p[index].ps)
         if n1 == n2 then
             return n1
         else
@@ -363,36 +384,35 @@ end
 -- The set 'follow' is the first set of what follows the
 -- pattern (full set if nothing follows it)
 
-local function getfirst(tree, follow, index)
-    local tag = tree[index].tag
+local function getfirst(tree, follow, index, valuetable)
+    local tag = tree.p[index].tag
     if tag == TChar or tag == TSet or tag == TAny then
-        local firstset = tocharset(tree, index)
+        local firstset = tocharset(tree, index, valuetable)
         return 0, firstset
     elseif tag == TTrue then
-        local firstset = ffi.new('uint32_t[8]')
-        for i = 0, 8 - 1 do
-            firstset[i] = follow[i]
-        end
+        local firstset = settype()
+        ffi.copy(firstset, follow, ffi.sizeof(firstset))
         return 1, firstset
     elseif tag == TFalse then
-        local firstset = ffi.new('uint32_t[8]')
-        for i = 0, 8 - 1 do
-            firstset[i] = 0
-        end
+        local firstset = settype()
         return 0, firstset
     elseif tag == TChoice then
-        local e1, firstset = getfirst(tree, follow, index + 1)
-        local e2, csaux = getfirst(tree, follow, index + tree[index].ps)
+        local e1, firstset = getfirst(tree, follow, index + 1, valuetable)
+        if not firstset then return 0 end
+        local e2, csaux = getfirst(tree, follow, index + tree.p[index].ps, valuetable)
+        if not csaux then return 0 end
         for i = 0, 8 - 1 do
             firstset[i] = bor(firstset[i], csaux[i])
         end
         return bor(e1, e2), firstset
     elseif tag == TSeq then
         if not checkaux(tree, PEnullable, index + 1) then
-            return getfirst(tree, fullset, index + 1)
+            return getfirst(tree, fullset, index + 1, valuetable)
         else -- FIRST(p1 p2, fl) = FIRST(p1, FIRST(p2, fl))
-            local e2, csaux = getfirst(tree, follow, index + tree[index].ps)
-            local e1, firstset = getfirst(tree, csaux, index + 1)
+            local e2, csaux = getfirst(tree, follow, index + tree.p[index].ps, valuetable)
+            if not csaux then return 0 end
+            local e1, firstset = getfirst(tree, csaux, index + 1, valuetable)
+            if not firstset then return 0 end
             if e1 == 0 then -- 'e1' ensures that first can be used
                 return 0, firstset
             elseif band(bor(e1, e2), 2) == 2 then -- one of the children has a matchtime?
@@ -402,45 +422,48 @@ local function getfirst(tree, follow, index)
             end
         end
     elseif tag == TRep then
-        local _, firstset = getfirst(tree, follow, index + 1)
+        local _, firstset = getfirst(tree, follow, index + 1, valuetable)
+        if not firstset then return 0 end
         for i = 0, 8 - 1 do
             firstset[i] = bor(firstset[i], follow[i])
         end
         return 1, firstset -- accept the empty string
     elseif tag == TCapture or tag == TGrammar or tag == TRule then
-        return getfirst(tree, follow, index + 1)
+        return getfirst(tree, follow, index + 1, valuetable)
     elseif tag == TRunTime then -- function invalidates any follow info.
-        local e, firstset = getfirst(tree, fullset, index + 1)
+        local e, firstset = getfirst(tree, fullset, index + 1, valuetable)
         if e ~= 0 then
             return 2, firstset -- function is not "protected"?
         else
             return 0, firstset -- pattern inside capture ensures first can be used
         end
     elseif tag == TCall then
-        return getfirst(tree, follow, index + tree[index].ps)
+        if tree.p[index].cap ~= 0 then
+            return 0
+        end
+        return getfirst(tree, follow, index + tree.p[index].ps, valuetable)
     elseif tag == TAnd then
-        local e, firstset = getfirst(tree, follow, index + 1)
+        local e, firstset = getfirst(tree, follow, index + 1, valuetable)
+        if not firstset then return 0 end
         for i = 0, 8 - 1 do
             firstset[i] = band(firstset[i], follow[i])
         end
         return e, firstset
     elseif tag == TNot then
-        local firstset = tocharset(tree, index + 1)
+        local firstset = tocharset(tree, index + 1, valuetable)
         if firstset then
             cs_complement(firstset)
             return 1, firstset
         end
-        local e, firstset = getfirst(tree, follow, index + 1)
-        for i = 0, 8 - 1 do
-            firstset[i] = follow[i] -- uses follow
-        end
+        local e, firstset = getfirst(tree, follow, index + 1, valuetable)
+        if not firstset then return 0 end
+        ffi.copy(firstset, follow, ffi.sizeof(firstset))
         return bor(e, 1), firstset -- always can accept the empty string
     elseif tag == TBehind then -- instruction gives no new information
         -- call 'getfirst' to check for math-time captures
-        local e, firstset = getfirst(tree, follow, index + 1)
-        for i = 0, 8 - 1 do
-            firstset[i] = follow[i] -- uses follow
-        end
+        local e, firstset = getfirst(tree, follow, index + 1, valuetable)
+        if not firstset then return 0 end
+        ffi.copy(firstset, follow, ffi.sizeof(firstset))
         return bor(e, 1), firstset -- always can accept the empty string
     else
         assert(false)
@@ -452,7 +475,7 @@ end
 -- character of the subject
 
 local function headfail(tree, index)
-    local tag = tree[index].tag
+    local tag = tree.p[index].tag
     if tag == TChar or tag == TSet or tag == TAny or tag == TFalse then
         return true
     elseif tag == TTrue or tag == TRep or tag == TRunTime or tag == TNot or tag == TBehind then
@@ -460,9 +483,12 @@ local function headfail(tree, index)
     elseif tag == TCapture or tag == TGrammar or tag == TRule or tag == TAnd then
         return headfail(tree, index + 1)
     elseif tag == TCall then
-        return headfail(tree, index + tree[index].ps)
+        if tree.p[index].cap ~= 0 then --OK
+            return
+        end
+        return headfail(tree, index + tree.p[index].ps)
     elseif tag == TSeq then
-        if not checkaux(tree, PEnofail, index + tree[index].ps) then
+        if not checkaux(tree, PEnofail, index + tree.p[index].ps) then
             return
         else
             return headfail(tree, index + 1)
@@ -471,7 +497,7 @@ local function headfail(tree, index)
         if not headfail(tree, index + 1) then
             return
         else
-            return headfail(tree, index + tree[index].ps)
+            return headfail(tree, index + tree.p[index].ps)
         end
     else
         assert(false)
@@ -484,7 +510,7 @@ end
 -- not needed)
 
 local function needfollow(tree, index)
-    local tag = tree[index].tag
+    local tag = tree.p[index].tag
     if tag == TChar or tag == TSet or tag == TAny or tag == TFalse or tag == TTrue or tag == TAnd or tag == TNot or
             tag == TRunTime or tag == TGrammar or tag == TCall or tag == TBehind then
         return
@@ -493,7 +519,7 @@ local function needfollow(tree, index)
     elseif tag == TCapture then
         return needfollow(tree, index + 1)
     elseif tag == TSeq then
-        return needfollow(tree, index + tree[index].ps)
+        return needfollow(tree, index + tree.p[index].ps)
     else
         assert(false)
     end
@@ -514,16 +540,19 @@ end
 
 
 local function addinstruction(code, op, val)
-    local inst = {}
-    code[#code + 1] = inst
-    inst.code = op;
-    inst.val = val
-    return #code
+    local size = code.size
+    if size >= code.allocsize then
+        code:doublesize()
+    end
+    code.p[size].code = op
+    code.p[size].val = val
+    code.size = size + 1
+    return size
 end
 
 
 local function setoffset(code, instruction, offset)
-    code[instruction].offset = offset;
+    code.p[instruction].offset = offset;
 end
 
 
@@ -546,7 +575,7 @@ end
 
 
 local function jumptohere(code, instruction)
-    jumptothere(code, instruction, #code + 1)
+    jumptothere(code, instruction, code.size)
 end
 
 
@@ -554,9 +583,9 @@ end
 -- test dominating it
 
 local function codechar(code, c, tt)
-    assert(tt ~= 0)
-    if tt > 0 and code[tt].code == ITestChar and
-            code[tt].val == c then
+    assert(tt ~= -1)
+    if tt >= 0 and code.p[tt].code == ITestChar and
+            code.p[tt].val == c then
         addinstruction(code, IAny, 0)
     else
         addinstruction(code, IChar, c)
@@ -566,8 +595,10 @@ end
 
 -- Code an ISet instruction
 
-local function coderealcharset(code, cs)
-    return addinstruction(code, ISet, cs)
+local function coderealcharset(code, cs, valuetable)
+    local ind = #valuetable + 1
+    valuetable[ind] = cs
+    return addinstruction(code, ISet, ind)
 end
 
 
@@ -575,17 +606,17 @@ end
 -- sets for IAny, and empty sets for IFail; also use an IAny
 -- when instruction is dominated by an equivalent test.
 
-local function codecharset(code, cs, tt)
+local function codecharset(code, cs, tt, valuetable)
     local op, c = charsettype(cs)
     if op == IChar then
         codechar(code, c, tt)
     elseif op == ISet then
-        assert(tt ~= 0)
-        if tt > 0 and code[tt].code == ITestSet and
-                cs_equal(cs, code[tt].val) then
+        assert(tt ~= -1)
+        if tt >= 0 and code.p[tt].code == ITestSet and
+                cs_equal(cs, valuetable[code.p[tt].val]) then
             addinstruction(code, IAny, 0)
         else
-            coderealcharset(code, cs)
+            coderealcharset(code, cs, valuetable)
         end
     else
         addinstruction(code, op, c)
@@ -598,13 +629,13 @@ end
 -- 'e' is true iff test should accept the empty string. (Test
 -- instructions in the current VM never accept the empty string.)
 
-local function codetestset(code, cs, e)
+local function codetestset(code, cs, e, valuetable)
     if e ~= 0 then
         return NOINST -- no test
     else
-        local pos = #code + 1
-        codecharset(code, cs, NOINST)
-        local inst = code[pos]
+        local pos = code.size
+        codecharset(code, cs, NOINST, valuetable)
+        local inst = code.p[pos]
         local code = inst.code
         if code == IFail then
             inst.code = IJmp -- always jump
@@ -625,8 +656,8 @@ end
 -- Find the final destination of a sequence of jumps
 
 local function finaltarget(code, i)
-    while code[i].code == IJmp do
-        i = i + code[i].offset
+    while code.p[i].code == IJmp do
+        i = i + code.p[i].offset
     end
     return i
 end
@@ -635,16 +666,16 @@ end
 -- final label (after traversing any jumps)
 
 local function finallabel(code, i)
-    return finaltarget(code, i + code[i].offset)
+    return finaltarget(code, i + code.p[i].offset)
 end
 
 -- <behind(p)> == behind n; <p>   (where n = fixedlen(p))
 
-local function codebehind(code, tree, index)
-    if tree[index].val > 0 then
-        addinstruction(code, IBehind, tree[index].val)
+local function codebehind(code, tree, index, valuetable)
+    if tree.p[index].val > 0 then
+        addinstruction(code, IBehind, tree.p[index].val)
     end
-    codegen(code, tree, fullset, false, NOINST, index + 1) --  NOINST
+    codegen(code, tree, fullset, false, NOINST, index + 1, valuetable) --  NOINST
 end
 
 
@@ -658,36 +689,46 @@ end
 -- - when p2 is empty and opt is true; a IPartialCommit can resuse
 -- the Choice already active in the stack.
 
-local function codechoice(code, tree, fl, opt, p1, p2)
-    local emptyp2 = tree[p2].tag == TTrue
-    local e1, st1 = getfirst(tree, fullset, p1)
-    local _, st2 = getfirst(tree, fl, p2)
-    if headfail(tree, p1) or (e1 == 0 and cs_disjoint(st1, st2)) then
-        -- <p1 / p2> == test (fail(p1)) -> L1 ; p1 ; jmp L2; L1: p2; L2:
-        local test = codetestset(code, st1, 0)
-        local jmp = NOINST;
-        codegen(code, tree, fl, false, test, p1)
-        if not emptyp2 then
-            jmp = addinstruction(code, IJmp, 0)
-        end
-        jumptohere(code, test)
-        codegen(code, tree, fl, opt, NOINST, p2)
-        jumptohere(code, jmp)
-    elseif opt and emptyp2 then
-        -- p1? == IPartialCommit; p1
-        jumptohere(code, addinstruction(code, IPartialCommit, 0))
-        codegen(code, tree, fullset, true, NOINST, p1)
-    else
-        -- <p1 / p2> ==
-        --  test(fail(p1)) -> L1; choice L1; <p1>; commit L2; L1: <p2>; L2:
-        local test = codetestset(code, st1, e1)
+local function codechoice(code, tree, fl, opt, p1, p2, valuetable)
+    local emptyp2 = tree.p[p2].tag == TTrue
+    local e1, st1 = getfirst(tree, fullset, p1, valuetable)
+    local _, st2 = getfirst(tree, fl, p2, valuetable)
+    if not st1 or not st2 then
+        local emptyp2 = tree.p[p2].tag == TTrue
         local pchoice = addinstruction(code, IChoice, 0)
-        codegen(code, tree, fullset, emptyp2, test, p1)
+        codegen(code, tree, fullset, emptyp2, NOINST, p1, valuetable)
         local pcommit = addinstruction(code, ICommit, 0)
         jumptohere(code, pchoice)
-        jumptohere(code, test)
-        codegen(code, tree, fl, opt, NOINST, p2)
+        codegen(code, tree, fl, opt, NOINST, p2, valuetable)
         jumptohere(code, pcommit)
+    else
+        if headfail(tree, p1) or (e1 == 0 and cs_disjoint(st1, st2)) then
+            -- <p1 / p2> == test (fail(p1)) -> L1 ; p1 ; jmp L2; L1: p2; L2:
+            local test = codetestset(code, st1, 0, valuetable)
+            local jmp = NOINST;
+            codegen(code, tree, fl, false, test, p1, valuetable)
+            if not emptyp2 then
+                jmp = addinstruction(code, IJmp, 0)
+            end
+            jumptohere(code, test)
+            codegen(code, tree, fl, opt, NOINST, p2, valuetable)
+            jumptohere(code, jmp)
+        elseif opt and emptyp2 then
+            -- p1? == IPartialCommit; p1
+            jumptohere(code, addinstruction(code, IPartialCommit, 0))
+            codegen(code, tree, fullset, true, NOINST, p1, valuetable)
+        else
+            -- <p1 / p2> ==
+            --  test(fail(p1)) -> L1; choice L1; <p1>; commit L2; L1: <p2>; L2:
+            local test = codetestset(code, st1, e1, valuetable)
+            local pchoice = addinstruction(code, IChoice, 0)
+            codegen(code, tree, fullset, emptyp2, test, p1, valuetable)
+            local pcommit = addinstruction(code, ICommit, 0)
+            jumptohere(code, pchoice)
+            jumptohere(code, test)
+            codegen(code, tree, fl, opt, NOINST, p2, valuetable)
+            jumptohere(code, pcommit)
+        end
     end
 end
 
@@ -696,18 +737,17 @@ end
 -- optimization: fixedlen(p) = n ==> <&p> == <p>; behind n
 -- (valid only when 'p' has no captures)
 
-local function codeand(code, tree, tt, index)
+local function codeand(code, tree, tt, index, valuetable)
     local n = fixedlenx(tree, 0, 0, index)
     if n >= 0 and n <= MAXBEHIND and not hascaptures(tree, index) then
-        codegen(code, tree, fullset, false, tt, index)
+        codegen(code, tree, fullset, false, tt, index, valuetable)
         if n > 0 then
             addinstruction(code, IBehind, n)
         end
     else -- default: Choice L1; p1; BackCommit L2; L1: Fail; L2:
-        local pcommit;
         local pchoice = addinstruction(code, IChoice, 0)
-        codegen(code, tree, fullset, false, tt, index)
-        pcommit = addinstruction(code, IBackCommit, 0)
+        codegen(code, tree, fullset, false, tt, index, valuetable)
+        local pcommit = addinstruction(code, IBackCommit, 0)
         jumptohere(code, pchoice)
         addinstruction(code, IFail, 0)
         jumptohere(code, pcommit)
@@ -719,22 +759,22 @@ end
 -- a single IFullCapture instruction after the match; otherwise,
 -- enclose the pattern with OpenCapture - CloseCapture.
 
-local function codecapture(code, tree, fl, tt, index)
+local function codecapture(code, tree, fl, tt, index, valuetable)
     local len = fixedlenx(tree, 0, 0, index + 1)
     if len >= 0 and len <= MAXOFF and not hascaptures(tree, index + 1) then
-        codegen(code, tree, fl, false, tt, index + 1)
-        addinstcap(code, IFullCapture, tree[index].cap, tree[index].val, len)
+        codegen(code, tree, fl, false, tt, index + 1, valuetable)
+        addinstcap(code, IFullCapture, tree.p[index].cap, tree.p[index].val, len)
     else
-        addinstcap(code, IOpenCapture, tree[index].cap, tree[index].val, 0)
-        codegen(code, tree, fl, false, tt, index + 1)
+        addinstcap(code, IOpenCapture, tree.p[index].cap, tree.p[index].val, 0)
+        codegen(code, tree, fl, false, tt, index + 1, valuetable)
         addinstcap(code, ICloseCapture, Cclose, 0, 0)
     end
 end
 
 
-local function coderuntime(code, tree, tt, index)
-    addinstcap(code, IOpenCapture, Cgroup, tree[index].val, 0)
-    codegen(code, tree, fullset, false, tt, index + 1)
+local function coderuntime(code, tree, tt, index, valuetable)
+    addinstcap(code, IOpenCapture, Cgroup, tree.p[index].val, 0)
+    codegen(code, tree, fullset, false, tt, index + 1, valuetable)
     addinstcap(code, ICloseRunTime, Cclose, 0, 0)
 end
 
@@ -748,37 +788,50 @@ end
 -- When 'opt' is true, the repetion can reuse the Choice already
 -- active in the stack.
 
-local function coderep(code, tree, opt, fl, index)
-    local st = tocharset(tree, index)
+local function coderep(code, tree, opt, fl, index, valuetable)
+    local st = tocharset(tree, index, valuetable)
     if st then
-        local op = coderealcharset(code, st)
-        code[op].code = ISpan;
+        local op = coderealcharset(code, st, valuetable)
+        code.p[op].code = ISpan;
     else
-        local e1, st = getfirst(tree, fullset, index)
-        if headfail(tree, index) or (e1 == 0 and cs_disjoint(st, fl)) then
-            -- L1: test (fail(p1)) -> L2; <p>; jmp L1; L2:
-            local test = codetestset(code, st, 0)
-            codegen(code, tree, fullset, opt, test, index)
-            local jmp = addinstruction(code, IJmp, 0)
-            jumptohere(code, test)
-            jumptothere(code, jmp, test)
-        else
-            -- test(fail(p1)) -> L2; choice L2; L1: <p>; partialcommit L1; L2:
-            -- or (if 'opt'): partialcommit L1; L1: <p>; partialcommit L1;
-            local commit, l2;
-            local test = codetestset(code, st, e1)
+        local e1, st = getfirst(tree, fullset, index, valuetable)
+        if not st then
             local pchoice = NOINST;
             if opt then
                 jumptohere(code, addinstruction(code, IPartialCommit, 0))
             else
                 pchoice = addinstruction(code, IChoice, 0)
             end
-            l2 = #code + 1
-            codegen(code, tree, fullset, false, NOINST, index)
-            commit = addinstruction(code, IPartialCommit, 0)
+            local l2 = code.size
+            codegen(code, tree, fullset, false, NOINST, index, valuetable)
+            local commit = addinstruction(code, IPartialCommit, 0)
             jumptothere(code, commit, l2)
             jumptohere(code, pchoice)
-            jumptohere(code, test)
+        else
+            if headfail(tree, index) or (e1 == 0 and cs_disjoint(st, fl)) then
+                -- L1: test (fail(p1)) -> L2; <p>; jmp L1; L2:
+                local test = codetestset(code, st, 0, valuetable)
+                codegen(code, tree, fullset, opt, test, index, valuetable)
+                local jmp = addinstruction(code, IJmp, 0)
+                jumptohere(code, test)
+                jumptothere(code, jmp, test)
+            else
+                -- test(fail(p1)) -> L2; choice L2; L1: <p>; partialcommit L1; L2:
+                -- or (if 'opt'): partialcommit L1; L1: <p>; partialcommit L1;
+                local test = codetestset(code, st, e1, valuetable)
+                local pchoice = NOINST;
+                if opt then
+                    jumptohere(code, addinstruction(code, IPartialCommit, 0))
+                else
+                    pchoice = addinstruction(code, IChoice, 0)
+                end
+                local l2 = code.size
+                codegen(code, tree, fullset, false, NOINST, index, valuetable)
+                local commit = addinstruction(code, IPartialCommit, 0)
+                jumptothere(code, commit, l2)
+                jumptohere(code, pchoice)
+                jumptohere(code, test)
+            end
         end
     end
 end
@@ -790,19 +843,26 @@ end
 -- in other parts); this case includes 'not' of simple sets. Otherwise,
 -- use the default code (a choice plus a failtwice).
 
-local function codenot(code, tree, index)
-    local e, st = getfirst(tree, fullset, index)
-    local test = codetestset(code, st, e)
-    if headfail(tree, index) then -- test (fail(p1)) -> L1; fail; L1:
-        addinstruction(code, IFail, 0)
-    else
-        -- test(fail(p))-> L1; choice L1; <p>; failtwice; L1:
+local function codenot(code, tree, index, valuetable)
+    local e, st = getfirst(tree, fullset, index, valuetable)
+    if not st then
         local pchoice = addinstruction(code, IChoice, 0)
-        codegen(code, tree, fullset, false, NOINST, index)
+        codegen(code, tree, fullset, false, NOINST, index, valuetable)
         addinstruction(code, IFailTwice, 0)
         jumptohere(code, pchoice)
+    else
+        local test = codetestset(code, st, e, valuetable)
+        if headfail(tree, index) then -- test (fail(p1)) -> L1; fail; L1:
+            addinstruction(code, IFail, 0)
+        else
+            -- test(fail(p))-> L1; choice L1; <p>; failtwice; L1:
+            local pchoice = addinstruction(code, IChoice, 0)
+            codegen(code, tree, fullset, false, NOINST, index, valuetable)
+            addinstruction(code, IFailTwice, 0)
+            jumptohere(code, pchoice)
+        end
+        jumptohere(code, test)
     end
-    jumptohere(code, test)
 end
 
 
@@ -811,14 +871,14 @@ end
 
 local function correctcalls(code, positions, from, to)
     for i = from, to - 1 do
-        if code[i].code == IOpenCall then
-            local n = code[i].offset; -- rule number
+        if code.p[i].code == IOpenCall then
+            local n = code.p[i].offset; -- rule number
             local rule = positions[n]; -- rule position
-            assert(rule == from or code[rule - 1].code == IRet)
-            if code[finaltarget(code, i + 1)].code == IRet then -- call; ret ?
-                code[i].code = IJmp; -- tail call
+            assert(rule == from or code.p[rule - 1].code == IRet)
+            if code.p[i].val == 0 and code.p[finaltarget(code, i + 1)].code == IRet then -- call; ret ?
+                code.p[i].code = IJmp; -- tail call
             else
-                code[i].code = ICall;
+                code.p[i].code = ICall;
             end
             jumptothere(code, i, rule) -- call jumps to respective rule
         end
@@ -829,91 +889,94 @@ end
 -- Code for a grammar:
 -- call L1; jmp L2; L1: rule 1; ret; rule 2; ret; ...; L2:
 
-local function codegrammar(code, tree, index)
+local function codegrammar(code, tree, index, valuetable)
     local positions = {}
     local rulenumber = 1;
-    local firstcall = addinstruction(code, ICall, 0) -- call initial rule
+    --    tree.p[rule].tag
+    local rule = index + 1
+    assert(tree.p[rule].tag == TRule)
+    local LR = 0
+    if band(RuleLR, tree.p[rule].cap) ~= 0 then LR = 1 end
+    local firstcall = addinstruction(code, ICall, LR) -- call initial rule
     local jumptoend = addinstruction(code, IJmp, 0) -- jump to the end
     jumptohere(code, firstcall) -- here starts the initial rule
-    local rule = index + 1
-    while tree[rule].tag == TRule do
-        positions[rulenumber] = #code + 1 -- save rule position
+    while tree.p[rule].tag == TRule do
+        positions[rulenumber] = code.size -- save rule position
         rulenumber = rulenumber + 1
-        codegen(code, tree, fullset, false, NOINST, rule + 1) -- code rule
+        codegen(code, tree, fullset, false, NOINST, rule + 1, valuetable) -- code rule
         addinstruction(code, IRet, 0)
-        rule = rule + tree[rule].ps
+        rule = rule + tree.p[rule].ps
     end
-    assert(tree[rule].tag == TTrue)
+    assert(tree.p[rule].tag == TTrue)
     jumptohere(code, jumptoend)
-    correctcalls(code, positions, firstcall + 2, #code + 1)
+    correctcalls(code, positions, firstcall + 2, code.size)
 end
 
 
 local function codecall(code, tree, index)
-    local c = addinstruction(code, IOpenCall, 0) -- to be corrected later
-    assert(tree[index + tree[index].ps].tag == TRule)
-    setoffset(code, c, tree[index + tree[index].ps].cap) -- offset = rule number
+    local c = addinstruction(code, IOpenCall, tree.p[index].cap) -- to be corrected later
+    assert(tree.p[index + tree.p[index].ps].tag == TRule)
+    setoffset(code, c, band(tree.p[index + tree.p[index].ps].cap, 0x7fff)) -- offset = rule number
 end
 
 
-local function codeseq(code, tree, fl, opt, tt, p1, p2)
+local function codeseq(code, tree, fl, opt, tt, p1, p2, valuetable)
     if needfollow(tree, p1) then
-        local _, fll = getfirst(tree, fl, p2) -- p1 follow is p2 first
-        codegen(code, tree, fll, false, tt, p1)
+        local _, fll = getfirst(tree, fl, p2, valuetable) -- p1 follow is p2 first
+        if not fll then fll = fullset end
+        codegen(code, tree, fll, false, tt, p1, valuetable)
     else -- use 'fullset' as follow
-        codegen(code, tree, fullset, false, tt, p1)
+        codegen(code, tree, fullset, false, tt, p1, valuetable)
     end
     if (fixedlenx(tree, 0, 0, p1) ~= 0) then -- can p1 consume anything?
         tt = NOINST; -- invalidate test
     end
-    codegen(code, tree, fl, opt, tt, p2)
+    codegen(code, tree, fl, opt, tt, p2, valuetable)
 end
 
 
 -- Main code-generation function: dispatch to auxiliar functions
 -- according to kind of tree
 
-function codegen(code, tree, fl, opt, tt, index)
-    local tag = tree[index].tag
+-- code generation is recursive; 'opt' indicates that the code is
+-- being generated under a 'IChoice' operator jumping to its end.
+-- 'tt' points to a previous test protecting this code. 'fl' is
+-- the follow set of the pattern.
+
+function codegen(code, tree, fl, opt, tt, index, valuetable)
+    local tag = tree.p[index].tag
     if tag == TChar then
-        codechar(code, tree[index].val, tt)
+        codechar(code, tree.p[index].val, tt)
     elseif tag == TAny then
         addinstruction(code, IAny, 0)
     elseif tag == TSet then
-        codecharset(code, tree[index].val, tt)
+        codecharset(code, valuetable[tree.p[index].val], tt, valuetable)
     elseif tag == TTrue then
     elseif tag == TFalse then
         addinstruction(code, IFail, 0)
     elseif tag == TSeq then
-        codeseq(code, tree, fl, opt, tt, index + 1, index + tree[index].ps)
+        codeseq(code, tree, fl, opt, tt, index + 1, index + tree.p[index].ps, valuetable)
     elseif tag == TChoice then
-        codechoice(code, tree, fl, opt, index + 1, index + tree[index].ps)
+        codechoice(code, tree, fl, opt, index + 1, index + tree.p[index].ps, valuetable)
     elseif tag == TRep then
-        coderep(code, tree, opt, fl, index + 1)
+        coderep(code, tree, opt, fl, index + 1, valuetable)
     elseif tag == TBehind then
-        codebehind(code, tree, index)
+        codebehind(code, tree, index, valuetable)
     elseif tag == TNot then
-        codenot(code, tree, index + 1)
+        codenot(code, tree, index + 1, valuetable)
     elseif tag == TAnd then
-        codeand(code, tree, tt, index + 1)
+        codeand(code, tree, tt, index + 1, valuetable)
     elseif tag == TCapture then
-        codecapture(code, tree, fl, tt, index)
+        codecapture(code, tree, fl, tt, index, valuetable)
     elseif tag == TRunTime then
-        coderuntime(code, tree, tt, index)
+        coderuntime(code, tree, tt, index, valuetable)
     elseif tag == TGrammar then
-        codegrammar(code, tree, index)
+        codegrammar(code, tree, index, valuetable)
     elseif tag == TCall then
         codecall(code, tree, index)
     else
         assert(false)
     end
-end
-
-
-local function copy(c1, c2)
-    c1.code = c2.code
-    c1.val = c2.val
-    c1.offset = c2.offset
 end
 
 
@@ -926,9 +989,9 @@ end
 -- to commit becomes a commit)
 
 local function peephole(code)
-    local i = 1
-    while i <= #code do
-        local tag = code[i].code
+    local i = 0
+    while i < code.size do
+        local tag = code.p[i].code
         if tag == IChoice or tag == ICall or tag == ICommit or tag == IPartialCommit or
                 tag == IBackCommit or tag == ITestChar or tag == ITestSet or tag == ITestAny then
             -- instructions with labels
@@ -936,12 +999,12 @@ local function peephole(code)
 
         elseif tag == IJmp then
             local ft = finaltarget(code, i)
-            local tag = code[ft].code -- jumping to what?
+            local tag = code.p[ft].code -- jumping to what?
             if tag == IRet or tag == IFail or tag == IFailTwice or tag == IEnd then -- instructions with unconditional implicit jumps
-                copy(code[i], code[ft]) -- jump becomes that instruction
+                ffi.copy(code.p + i, code.p + ft, ffi.sizeof(patternelement)) -- jump becomes that instruction
             elseif tag == ICommit or tag == IPartialCommit or tag == IBackCommit then -- inst. with unconditional explicit jumps
                 local fft = finallabel(code, ft)
-                copy(code[i], code[ft]) -- jump becomes that instruction...
+                ffi.copy(code.p + i, code.p + ft, ffi.sizeof(patternelement)) -- jump becomes that instruction...
                 jumptothere(code, i, fft) -- but must correct its offset
                 i = i - 1 -- reoptimize its label
             else
@@ -955,16 +1018,48 @@ end
 
 -- Compile a pattern
 
-local function compile(tree, index)
-    local code = {}
-    codegen(code, tree, fullset, false, NOINST, index)
+local function compile(tree, index, valuetable)
+    local code = pattern()
+    codegen(code, tree, fullset, false, NOINST, index, valuetable)
     addinstruction(code, IEnd, 0)
     peephole(code)
+    ffi.C.free(tree.code)
     tree.code = code
 end
 
+local function pat_new(ct, size)
+    size = size or 0
+    local allocsize = size
+    if allocsize < 10 then
+        allocsize = 10
+    end
+    local pat = ffi.cast('PATTERN*', ffi.C.malloc(ffi.sizeof(pattern)))
+    assert(pat ~= nil)
+    pat.allocsize = allocsize
+    pat.size = size
+    pat.p = ffi.C.malloc(ffi.sizeof(patternelement) * allocsize)
+    assert(pat.p ~= nil)
+    ffi.fill(pat.p, ffi.sizeof(patternelement) * allocsize)
+    return pat
+end
 
--- ======================================================
+local function doublesize(ct)
+    ct.p = ffi.C.realloc(ct.p, ffi.sizeof(patternelement) * ct.allocsize * 2)
+    assert(ct.p ~= nil)
+    ffi.fill(ct.p + ct.allocsize, ffi.sizeof(patternelement) * ct.allocsize)
+    ct.allocsize = ct.allocsize * 2
+end
+
+local pattreg = {
+    doublesize = doublesize,
+}
+
+local metareg = {
+    ["__new"] = pat_new,
+    ["__index"] = pattreg
+}
+
+ffi.metatype(pattern, metareg)
 
 return {
     checkaux = checkaux,
