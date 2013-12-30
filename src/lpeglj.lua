@@ -700,7 +700,7 @@ local function getfirstrule(pat, postab)
         error("grammar has no initial rule")
     end
     if not gettree(rule) then -- initial rule not a pattern?
-        error(("initial rule '%s' is not a pattern"):format(tostring(firstrule)))
+        error(("initial rule '%s' is not a pattern"):format(tostring(key)))
     end
     postab[key] = 1
     return key, rule
