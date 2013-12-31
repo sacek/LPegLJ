@@ -174,7 +174,9 @@ local function correctassociativity(tree, index)
         local n1size = tree.p[index].ps - 1; -- t1 == Op t11 t12
         local n11size = tree.p[t1].ps - 1;
         local n12size = n1size - n11size - 1
-        ffi.copy(tree.p + index + 1, tree.p + t1 + 1, ffi.sizeof(treepatternelement) * n11size)
+        for i = 1, n11size do
+            ffi.copy(tree.p + index + i, tree.p + t1 + i, ffi.sizeof(treepatternelement))
+        end
         tree.p[index].ps = n11size + 1
         tree.p[index + tree.p[index].ps].tag = tree.p[index].tag
         tree.p[index + tree.p[index].ps].ps = n12size + 1
