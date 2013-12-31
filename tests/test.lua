@@ -33,7 +33,7 @@ end
 
 
 local mt = getmetatable(m.P(1))
-mt = m.version() == "0.20LJ" and m or mt
+mt = m.version() == "0.12.1LJ" and m or mt
 
 
 local allchar = {}
@@ -1018,7 +1018,7 @@ assert(p == 'alo')
 
 
 -- ensure that failed match-time captures are not kept on Lua stack
-if m.version() ~= "0.20LJ" then -- results are placed in value table not on stack
+if m.version() ~= "0.12.1LJ" then -- results are placed in value table not on stack
 do
   local t = {__mode = "kv"}; setmetatable(t,t)
   local c = 0

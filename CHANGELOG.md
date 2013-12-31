@@ -1,4 +1,4 @@
-0.20 : December 30, 2013
+0.12.1 : December 30, 2013
 
 - speed improvement
 - support direct and indirect left recursion based on Sérgio Medeiros algorithm (http://arxiv.org/abs/1207.0443)

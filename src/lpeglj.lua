@@ -72,7 +72,7 @@ ffi.cdef[[
 
 local MAXBEHIND = 255
 local MAXRULES = 200
-local VERSION = "0.20LJ"
+local VERSION = "0.12.1LJ"
 
 local TChar = 0
 local TSet = 1

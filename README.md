@@ -1,5 +1,5 @@
-LPegLJ v.20
-===========
+LPegLJ v.12.1
+=============
 
 LPeg Parser in pure LuaJIT  
 (straight Lua + FFI translation of LPeg C code)   
