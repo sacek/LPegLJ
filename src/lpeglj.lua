@@ -92,6 +92,31 @@ local TBehind = 14 -- match behind
 local TCapture = 15 -- regular capture
 local TRunTime = 16 -- run-time capture
 
+local IAny = 0 -- if no char, fail
+local IChar = 1 -- if char != val, fail
+local ISet = 2 -- if char not in val, fail
+local ITestAny = 3 -- in no char, jump to 'offset'
+local ITestChar = 4 -- if char != val, jump to 'offset'
+local ITestSet = 5 -- if char not in val, jump to 'offset'
+local ISpan = 6 -- read a span of chars in val
+local IBehind = 7 -- walk back 'val' characters (fail if not possible)
+local IRet = 8 -- return from a rule
+local IEnd = 9 -- end of pattern
+local IChoice = 10 -- stack a choice; next fail will jump to 'offset'
+local IJmp = 11 -- jump to 'offset'
+local ICall = 12 -- call rule at 'offset'
+local IOpenCall = 13 -- call rule number 'offset' (must be closed to a ICall)
+local ICommit = 14 -- pop choice and jump to 'offset'
+local IPartialCommit = 15 -- update top choice to current position and jump
+local IBackCommit = 16 -- "fails" but jump to its own 'offset'
+local IFailTwice = 17 -- pop one choice and then fail
+local IFail = 18 -- go back to saved state on choice and jump to saved offset
+local IGiveup = 19 -- internal use
+local IFullCapture = 20 -- complete capture of last 'off' chars
+local IOpenCapture = 21 -- start a capture
+local ICloseCapture = 22
+local ICloseRunTime = 23
+
 local Cclose = 0
 local Cposition = 1
 local Cconst = 2
@@ -969,10 +994,65 @@ end
 
 -- ======================================================
 
+-- remove duplicity from value table
+
+local function reducevaluetable(p)
+    local vtable = valuetable[p.id]
+    local value = {}
+    local newvaluetable = {}
+
+    local function check(v)
+        if v > 0 then
+            local ord = value[vtable[v]]
+            if not ord then
+                newvaluetable[#newvaluetable + 1] = vtable[v]
+                ord = #newvaluetable
+                value[vtable[v]] = ord
+            end
+            return ord
+        end
+        return 0
+    end
+
+    local function itertree(p, index)
+        local tag = p.p[index].tag
+        if tag == TSet or tag == TCall or tag == TOpenCall or
+                tag == TRule or tag == TCapture or tag == TRunTime then
+            p.p[index].val = check(p.p[index].val)
+        end
+        local ns = numsiblings[tag + 1]
+        if ns == 0 then
+        elseif ns == 1 then
+            return itertree(p, index + 1)
+        elseif ns == 2 then
+            itertree(p, index + 1)
+            return itertree(p, index + p.p[index].ps)
+        else
+            assert(false)
+        end
+    end
+
+    if p.treesize > 0 then
+        itertree(p, 0)
+    end
+    if p.code ~= nil then
+        for i = 0, p.code.size - 1 do
+            local code = p.code.p[i].code
+            if code == ISet or code == ITestSet or code == ISpan then
+                p.code.p[i].val = check(p.code.p[i].val)
+            elseif code == IOpenCapture or code == IFullCapture then
+                p.code.p[i].offset = check(p.code.p[i].offset)
+            end
+        end
+    end
+    valuetable[p.id] = newvaluetable
+end
+
 
 local function prepcompile(p, index)
     finalfix(false, nil, p, index, valuetable[p.id])
     lpcode.compile(p, index, valuetable[p.id])
+    reducevaluetable(p)
     return p.code
 end
 
