@@ -1018,7 +1018,6 @@ assert(p == 'alo')
 
 
 -- ensure that failed match-time captures are not kept on Lua stack
-if m.version() ~= "0.12.1LJ" then -- results are placed in value table not on stack
 do
   local t = {__mode = "kv"}; setmetatable(t,t)
   local c = 0
@@ -1035,7 +1034,6 @@ do
   local p = m.P{ m.Cmt(0, foo) * m.P(false) + m.P(1) * m.V(1) + m.P"" }
   p:match(string.rep('1', 10))
   assert(c == 11)
-end
 end
 
 p = (m.P(function () return true, "a" end) * 'a'

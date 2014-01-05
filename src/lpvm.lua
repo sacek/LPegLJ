@@ -101,6 +101,7 @@ int s;
 int caplevel;
 int pA;
 int X;
+int valuetabletop;
 } STACK;
 
 typedef
@@ -177,6 +178,7 @@ local function match(o, s, op, valuetable, ...)
     local p = 0 -- current instruction
     STACK[stackptr].s = s
     STACK[stackptr].caplevel = -1
+    STACK[stackptr].valuetabletop = -1
     STACK[stackptr].p = FAIL
     STACK[stackptr].X = VOID
     stackptr = stackptr + 1
@@ -216,12 +218,17 @@ local function match(o, s, op, valuetable, ...)
                 L[STACK[stackptr].pA + s * maxpointer] = nil
             end
             until s ~= FAIL and X ~= LRFAIL
-        if X ~= VOID then
-            s = X
-        else
-            captop = STACK[stackptr].caplevel
-        end
         p = STACK[stackptr].p
+        if p ~= FAIL then
+            if X ~= VOID then
+                s = X
+            else
+                captop = STACK[stackptr].caplevel
+                for i = #valuetable, STACK[stackptr].valuetabletop + 1, -1 do
+                    table.remove(valuetable)
+                end
+            end
+        end
     end
 
     local function doublestack()
@@ -263,6 +270,7 @@ local function match(o, s, op, valuetable, ...)
                     local lambda = L[p + s * maxpointer]
                     lambda.X = STACK[stackptr - 1].X
                     STACK[stackptr - 1].caplevel = captop
+                    STACK[stackptr - 1].valuetabletop = #valuetable
                     CAPTURESTACK[capturestackptr].captop = captop
                     lambda.capturecommit = CAPTURESTACK[capturestackptr]
                     captop = 0
@@ -360,6 +368,7 @@ local function match(o, s, op, valuetable, ...)
             STACK[stackptr].p = p + op.p[p].offset
             STACK[stackptr].s = s
             STACK[stackptr].caplevel = captop
+            STACK[stackptr].valuetabletop = #valuetable
             stackptr = stackptr + 1
             p = p + 1
         elseif code == ICall then
@@ -372,6 +381,7 @@ local function match(o, s, op, valuetable, ...)
                 STACK[stackptr].s = FAIL
                 STACK[stackptr].p = p + 1 -- save return address
                 STACK[stackptr].caplevel = -1
+                STACK[stackptr].valuetabletop = -1
                 stackptr = stackptr + 1
                 p = p + op.p[p].offset
             else
@@ -391,6 +401,7 @@ local function match(o, s, op, valuetable, ...)
                     STACK[stackptr].s = s
                     STACK[stackptr].X = LRFAIL
                     STACK[stackptr].caplevel = captop
+                    STACK[stackptr].valuetabletop = #valuetable
                     stackptr = stackptr + 1
                     p = p + op.p[p].offset
                 elseif X.X == LRFAIL or k < X.k then
@@ -412,11 +423,15 @@ local function match(o, s, op, valuetable, ...)
         elseif code == IPartialCommit then
             STACK[stackptr - 1].s = s
             STACK[stackptr - 1].caplevel = captop
+            STACK[stackptr - 1].valuetabletop = #valuetable
             p = p + op.p[p].offset
         elseif code == IBackCommit then
             stackptr = stackptr - 1
             s = STACK[stackptr].s
             captop = STACK[stackptr].caplevel
+            for i = #valuetable, STACK[stackptr].valuetabletop + 1, -1 do
+                table.remove(valuetable)
+            end
             p = p + op.p[p].offset
         elseif code == IFailTwice then
             stackptr = stackptr - 1
