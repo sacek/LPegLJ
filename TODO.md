@@ -1,2 +1,20 @@
-### Captures:
-- getting and removing captures during parsing (for infinite parsing)
+### Infinite parsing (for streams)
+Handle input buffers and captures.
+
+### Grammar checking
+#### Check PEG and left recursion rules for right order.
+
+E <- ('a' / 'aa') 'b'
+
+E <- 'a' / E 'a'
+
+### Left factorization
+
+### Runtime capture
+Add commit and revert functions (for creating tables via Cmt).
+
+### Rule profiling
+
+### Performance tests
+
+
