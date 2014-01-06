@@ -177,8 +177,6 @@ local function match(o, s, op, valuetable, ...)
 
     local p = 0 -- current instruction
     STACK[stackptr].s = s
-    STACK[stackptr].caplevel = -1
-    STACK[stackptr].valuetabletop = -1
     STACK[stackptr].p = FAIL
     STACK[stackptr].X = VOID
     stackptr = stackptr + 1
@@ -213,7 +211,6 @@ local function match(o, s, op, valuetable, ...)
                 CAPTURESTACK[capturestackptr] = nil
                 capturestackptr = capturestackptr - 1
                 CAPTURE = CAPTURESTACK[capturestackptr].capture
-                captop = CAPTURESTACK[capturestackptr].captop
                 maxcapture = CAPTURESTACK[capturestackptr].maxcapture
                 L[STACK[stackptr].pA + s * maxpointer] = nil
             end
@@ -380,8 +377,6 @@ local function match(o, s, op, valuetable, ...)
                 STACK[stackptr].X = VOID
                 STACK[stackptr].s = FAIL
                 STACK[stackptr].p = p + 1 -- save return address
-                STACK[stackptr].caplevel = -1
-                STACK[stackptr].valuetabletop = -1
                 stackptr = stackptr + 1
                 p = p + op.p[p].offset
             else
@@ -400,10 +395,8 @@ local function match(o, s, op, valuetable, ...)
                     STACK[stackptr].pA = pA
                     STACK[stackptr].s = s
                     STACK[stackptr].X = LRFAIL
-                    STACK[stackptr].caplevel = captop
-                    STACK[stackptr].valuetabletop = #valuetable
                     stackptr = stackptr + 1
-                    p = p + op.p[p].offset
+                    p = pA
                 elseif X.X == LRFAIL or k < X.k then
                     fail()
                 else
