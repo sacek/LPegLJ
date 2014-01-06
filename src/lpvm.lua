@@ -278,8 +278,10 @@ local function match(o, s, op, valuetable, ...)
                     stackptr = stackptr - 1
                     p = STACK[stackptr].p
                     s = STACK[stackptr].X
+                    for i = #valuetable, STACK[stackptr].valuetabletop + 1, -1 do
+                        table.remove(valuetable)
+                    end
                     local lambda = L[STACK[stackptr].pA + STACK[stackptr].s * maxpointer]
-
                     capturestackptr = capturestackptr - 1
                     CAPTURE = CAPTURESTACK[capturestackptr].capture
                     captop = CAPTURESTACK[capturestackptr].captop
