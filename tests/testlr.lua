@@ -1,4 +1,5 @@
 local lpeg = require"lpeglj"
+local re = require"re"
 
 local m = lpeg
 
@@ -78,6 +79,21 @@ local ASTtree = pat:match("1+1+1")
 checkeq(ASTtree, { { { "1" }, "+", { "1" } }, "+", { "1" } })
 
 local ASTtree = pat:match("-1*(6+2/4+3-1)**2")
+checkeq(ASTtree, { { "-", { "1" } }, "*", { { { { { { "6" }, "+", { { "2" }, "/", { "4" } } }, "+", { "3" } }, "-", { "1" } } }, "**", { "2" } } })
+
+-- using re module with precedence (the same example as above)
+-- call_nonterminal : precedence_level or <call_nonterminal : precedence_level >
+
+local pat = [[
+     E <- (E:1 {[+-]} E:2 /
+          E:2 {[*/]} E:3 /
+          E:3 {'**'} E:3 /
+          {'-'} E:4 /
+          '(' E ')' /
+          {[0-9]+}) -> {}
+]]
+
+local ASTtree = re.match("-1*(6+2/4+3-1)**2", pat)
 checkeq(ASTtree, { { "-", { "1" } }, "*", { { { { { { "6" }, "+", { { "2" }, "/", { "4" } } }, "+", { "3" } }, "-", { "1" } } }, "**", { "2" } } })
 
 --[[

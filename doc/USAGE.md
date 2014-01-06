@@ -41,3 +41,18 @@ local pat = m.P{
     }
 pat:match("n+n+n")
 ```
+####using re module with precedence
+```Lua
+local lpeglj = require"lpeglj"
+local re = require"re"
+lpeglj.enableleftrecursion(true)
+local pat = [[
+     E <- E:1 [+-] E:2 / -- left associativity
+          E:2 [*/] E:3 /
+          E:3 '**' E:3 / -- right associativity
+          '-' E:4 /      -- highest precedence
+          '(' E ')' /
+          [0-9]+
+]]
+re.match("-1*(6+2/4+3-1)**2", pat)
+```

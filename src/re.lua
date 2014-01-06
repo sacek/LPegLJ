@@ -152,10 +152,10 @@ end
 local function firstdef (n, r) return adddef({n}, n, r) end
 
 
-local function NT (n, b)
+local function NT (n, b, p)
   if not b then
     error("rule '"..n.."' used outside a grammar")
-  else return mm.V(n)
+  else return mm.V(n, p or 0)
   end
 end
 
@@ -194,7 +194,7 @@ local exp = m.P{ "Exp",
             + "{|" * m.V"Exp" * "|}" / mm.Ct
             + "{" * m.V"Exp" * "}" / mm.C
             + m.P"." * m.Cc(any)
-            + (name * -arrow + "<" * name * ">") * m.Cb("G") / NT;
+            + (name * m.Cb("G") * (S * ":" * S * num)^-1 * -arrow + "<" * name * m.Cb("G") * (S * ":" * S * num)^-1 * ">") / NT;
   Definition = name * arrow * m.V"Exp";
   Grammar = m.Cg(m.Cc(true), "G") *
             m.Cf(m.V"Definition" / firstdef * m.Cg(m.V"Definition")^0,
