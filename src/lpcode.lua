@@ -122,7 +122,7 @@ ffi.cdef[[
                   int code;
                   int val;
                   int offset;
-                  int fill;
+                  int aux;
                  } PATTERN_ELEMENT;
   typedef struct {
                   int allocsize;
@@ -898,6 +898,7 @@ local function codegrammar(code, tree, index, valuetable)
     local LR = 0
     if band(RuleLR, tree.p[rule].cap) ~= 0 then LR = 1 end
     local firstcall = addinstruction(code, ICall, LR) -- call initial rule
+    code.p[firstcall].aux = tree.p[rule].val
     local jumptoend = addinstruction(code, IJmp, 0) -- jump to the end
     jumptohere(code, firstcall) -- here starts the initial rule
     while tree.p[rule].tag == TRule do
@@ -913,8 +914,9 @@ local function codegrammar(code, tree, index, valuetable)
 end
 
 
-local function codecall(code, tree, index)
+local function codecall(code, tree, index, val)
     local c = addinstruction(code, IOpenCall, tree.p[index].cap) -- to be corrected later
+    code.p[c].aux = val
     assert(tree.p[index + tree.p[index].ps].tag == TRule)
     setoffset(code, c, band(tree.p[index + tree.p[index].ps].cap, 0x7fff)) -- offset = rule number
 end
@@ -973,7 +975,7 @@ function codegen(code, tree, fl, opt, tt, index, valuetable)
     elseif tag == TGrammar then
         codegrammar(code, tree, index, valuetable)
     elseif tag == TCall then
-        codecall(code, tree, index)
+        codecall(code, tree, index, tree.p[index].val)
     else
         assert(false)
     end
