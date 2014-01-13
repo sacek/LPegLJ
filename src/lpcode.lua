@@ -284,7 +284,8 @@ end
 -- TOpenCall must be checked again when the grammar is fixed;
 -- TRunTime is an arbitrary choice.)
 
-local function checkaux(tree, pred, index)
+local function checkaux(tree, pred, index, lrcall)
+    lrcall = lrcall or {}
     local tag = tree.p[index].tag
     if tag == TChar or tag == TSet or tag == TAny or
             tag == TFalse or tag == TOpenCall then
@@ -303,33 +304,37 @@ local function checkaux(tree, pred, index)
         if pred == PEnullable then
             return true
         else
-            return checkaux(tree, pred, index + 1)
+            return checkaux(tree, pred, index + 1, lrcall)
         end
     elseif tag == TRunTime then -- can fail; match empty iff body does
         if pred == PEnofail then
             return
         else
-            return checkaux(tree, pred, index + 1)
+            return checkaux(tree, pred, index + 1, lrcall)
         end
     elseif tag == TSeq then
-        if not checkaux(tree, pred, index + 1) then
+        if not checkaux(tree, pred, index + 1, lrcall) then
             return
         else
-            return checkaux(tree, pred, index + tree.p[index].ps)
+            return checkaux(tree, pred, index + tree.p[index].ps, lrcall)
         end
     elseif tag == TChoice then
-        if checkaux(tree, pred, index + tree.p[index].ps) then
+        if checkaux(tree, pred, index + tree.p[index].ps, lrcall) then
             return true
         else
-            return checkaux(tree, pred, index + 1)
+            return checkaux(tree, pred, index + 1, lrcall)
         end
     elseif tag == TCapture or tag == TGrammar or tag == TRule then
-        return checkaux(tree, pred, index + 1)
-    elseif tag == TCall then -- OK
-        if tree.p[index].cap ~= 0 then
-            return
+        return checkaux(tree, pred, index + 1, lrcall)
+    elseif tag == TCall then
+        if tree.p[index].cap ~= 0 then --left recursive rule
+            if lrcall[index] then
+                return
+            else
+                lrcall[index] = true
+            end
         end
-        return checkaux(tree, pred, index + tree.p[index].ps)
+        return checkaux(tree, pred, index + tree.p[index].ps, lrcall)
     else
         assert(false)
     end
@@ -384,7 +389,8 @@ end
 -- The set 'follow' is the first set of what follows the
 -- pattern (full set if nothing follows it)
 
-local function getfirst(tree, follow, index, valuetable)
+local function getfirst(tree, follow, index, valuetable, lrcall)
+    lrcall = lrcall or {}
     local tag = tree.p[index].tag
     if tag == TChar or tag == TSet or tag == TAny then
         local firstset = tocharset(tree, index, valuetable)
@@ -397,22 +403,18 @@ local function getfirst(tree, follow, index, valuetable)
         local firstset = settype()
         return 0, firstset
     elseif tag == TChoice then
-        local e1, firstset = getfirst(tree, follow, index + 1, valuetable)
-        if not firstset then return 0 end
-        local e2, csaux = getfirst(tree, follow, index + tree.p[index].ps, valuetable)
-        if not csaux then return 0 end
+        local e1, firstset = getfirst(tree, follow, index + 1, valuetable, lrcall)
+        local e2, csaux = getfirst(tree, follow, index + tree.p[index].ps, valuetable, lrcall)
         for i = 0, 8 - 1 do
             firstset[i] = bor(firstset[i], csaux[i])
         end
         return bor(e1, e2), firstset
     elseif tag == TSeq then
         if not checkaux(tree, PEnullable, index + 1) then
-            return getfirst(tree, fullset, index + 1, valuetable)
+            return getfirst(tree, fullset, index + 1, valuetable, lrcall)
         else -- FIRST(p1 p2, fl) = FIRST(p1, FIRST(p2, fl))
-            local e2, csaux = getfirst(tree, follow, index + tree.p[index].ps, valuetable)
-            if not csaux then return 0 end
-            local e1, firstset = getfirst(tree, csaux, index + 1, valuetable)
-            if not firstset then return 0 end
+            local e2, csaux = getfirst(tree, follow, index + tree.p[index].ps, valuetable, lrcall)
+            local e1, firstset = getfirst(tree, csaux, index + 1, valuetable, lrcall)
             if e1 == 0 then -- 'e1' ensures that first can be used
                 return 0, firstset
             elseif band(bor(e1, e2), 2) == 2 then -- one of the children has a matchtime?
@@ -422,29 +424,31 @@ local function getfirst(tree, follow, index, valuetable)
             end
         end
     elseif tag == TRep then
-        local _, firstset = getfirst(tree, follow, index + 1, valuetable)
-        if not firstset then return 0 end
+        local _, firstset = getfirst(tree, follow, index + 1, valuetable, lrcall)
         for i = 0, 8 - 1 do
             firstset[i] = bor(firstset[i], follow[i])
         end
         return 1, firstset -- accept the empty string
     elseif tag == TCapture or tag == TGrammar or tag == TRule then
-        return getfirst(tree, follow, index + 1, valuetable)
+        return getfirst(tree, follow, index + 1, valuetable, lrcall)
     elseif tag == TRunTime then -- function invalidates any follow info.
-        local e, firstset = getfirst(tree, fullset, index + 1, valuetable)
+        local e, firstset = getfirst(tree, fullset, index + 1, valuetable, lrcall)
         if e ~= 0 then
             return 2, firstset -- function is not "protected"?
         else
             return 0, firstset -- pattern inside capture ensures first can be used
         end
     elseif tag == TCall then
-        if tree.p[index].cap ~= 0 then
-            return 0
+        if tree.p[index].cap ~= 0 then -- left recursive rule
+            if lrcall[index] then
+                return 0, settype()
+            else
+                lrcall[index] = true
+            end
         end
-        return getfirst(tree, follow, index + tree.p[index].ps, valuetable)
+        return getfirst(tree, follow, index + tree.p[index].ps, valuetable, lrcall)
     elseif tag == TAnd then
-        local e, firstset = getfirst(tree, follow, index + 1, valuetable)
-        if not firstset then return 0 end
+        local e, firstset = getfirst(tree, follow, index + 1, valuetable, lrcall)
         for i = 0, 8 - 1 do
             firstset[i] = band(firstset[i], follow[i])
         end
@@ -455,14 +459,12 @@ local function getfirst(tree, follow, index, valuetable)
             cs_complement(firstset)
             return 1, firstset
         end
-        local e, firstset = getfirst(tree, follow, index + 1, valuetable)
-        if not firstset then return 0 end
+        local e, firstset = getfirst(tree, follow, index + 1, valuetable, lrcall)
         ffi.copy(firstset, follow, ffi.sizeof(firstset))
         return bor(e, 1), firstset -- always can accept the empty string
     elseif tag == TBehind then -- instruction gives no new information
         -- call 'getfirst' to check for math-time captures
-        local e, firstset = getfirst(tree, follow, index + 1, valuetable)
-        if not firstset then return 0 end
+        local e, firstset = getfirst(tree, follow, index + 1, valuetable, lrcall)
         ffi.copy(firstset, follow, ffi.sizeof(firstset))
         return bor(e, 1), firstset -- always can accept the empty string
     else
@@ -474,30 +476,35 @@ end
 -- If it returns true, then pattern can fail only depending on the next
 -- character of the subject
 
-local function headfail(tree, index)
+local function headfail(tree, index, lrcall)
+    lrcall = lrcall or {}
     local tag = tree.p[index].tag
     if tag == TChar or tag == TSet or tag == TAny or tag == TFalse then
         return true
     elseif tag == TTrue or tag == TRep or tag == TRunTime or tag == TNot or tag == TBehind then
         return
     elseif tag == TCapture or tag == TGrammar or tag == TRule or tag == TAnd then
-        return headfail(tree, index + 1)
+        return headfail(tree, index + 1, lrcall)
     elseif tag == TCall then
-        if tree.p[index].cap ~= 0 then --OK
-            return
+        if tree.p[index].cap ~= 0 then -- left recursive rule
+            if lrcall[index] then
+                return true
+            else
+                lrcall[index] = true
+            end
         end
-        return headfail(tree, index + tree.p[index].ps)
+        return headfail(tree, index + tree.p[index].ps, lrcall)
     elseif tag == TSeq then
         if not checkaux(tree, PEnofail, index + tree.p[index].ps) then
             return
         else
-            return headfail(tree, index + 1)
+            return headfail(tree, index + 1, lrcall)
         end
     elseif tag == TChoice then
-        if not headfail(tree, index + 1) then
+        if not headfail(tree, index + 1, lrcall) then
             return
         else
-            return headfail(tree, index + tree.p[index].ps)
+            return headfail(tree, index + tree.p[index].ps, lrcall)
         end
     else
         assert(false)
@@ -693,42 +700,32 @@ local function codechoice(code, tree, fl, opt, p1, p2, valuetable)
     local emptyp2 = tree.p[p2].tag == TTrue
     local e1, st1 = getfirst(tree, fullset, p1, valuetable)
     local _, st2 = getfirst(tree, fl, p2, valuetable)
-    if not st1 or not st2 then
-        local emptyp2 = tree.p[p2].tag == TTrue
+    if headfail(tree, p1) or (e1 == 0 and cs_disjoint(st1, st2)) then
+        -- <p1 / p2> == test (fail(p1)) -> L1 ; p1 ; jmp L2; L1: p2; L2:
+        local test = codetestset(code, st1, 0, valuetable)
+        local jmp = NOINST;
+        codegen(code, tree, fl, false, test, p1, valuetable)
+        if not emptyp2 then
+            jmp = addinstruction(code, IJmp, 0)
+        end
+        jumptohere(code, test)
+        codegen(code, tree, fl, opt, NOINST, p2, valuetable)
+        jumptohere(code, jmp)
+    elseif opt and emptyp2 then
+        -- p1? == IPartialCommit; p1
+        jumptohere(code, addinstruction(code, IPartialCommit, 0))
+        codegen(code, tree, fullset, true, NOINST, p1, valuetable)
+    else
+        -- <p1 / p2> ==
+        --  test(fail(p1)) -> L1; choice L1; <p1>; commit L2; L1: <p2>; L2:
+        local test = codetestset(code, st1, e1, valuetable)
         local pchoice = addinstruction(code, IChoice, 0)
-        codegen(code, tree, fullset, emptyp2, NOINST, p1, valuetable)
+        codegen(code, tree, fullset, emptyp2, test, p1, valuetable)
         local pcommit = addinstruction(code, ICommit, 0)
         jumptohere(code, pchoice)
+        jumptohere(code, test)
         codegen(code, tree, fl, opt, NOINST, p2, valuetable)
         jumptohere(code, pcommit)
-    else
-        if headfail(tree, p1) or (e1 == 0 and cs_disjoint(st1, st2)) then
-            -- <p1 / p2> == test (fail(p1)) -> L1 ; p1 ; jmp L2; L1: p2; L2:
-            local test = codetestset(code, st1, 0, valuetable)
-            local jmp = NOINST;
-            codegen(code, tree, fl, false, test, p1, valuetable)
-            if not emptyp2 then
-                jmp = addinstruction(code, IJmp, 0)
-            end
-            jumptohere(code, test)
-            codegen(code, tree, fl, opt, NOINST, p2, valuetable)
-            jumptohere(code, jmp)
-        elseif opt and emptyp2 then
-            -- p1? == IPartialCommit; p1
-            jumptohere(code, addinstruction(code, IPartialCommit, 0))
-            codegen(code, tree, fullset, true, NOINST, p1, valuetable)
-        else
-            -- <p1 / p2> ==
-            --  test(fail(p1)) -> L1; choice L1; <p1>; commit L2; L1: <p2>; L2:
-            local test = codetestset(code, st1, e1, valuetable)
-            local pchoice = addinstruction(code, IChoice, 0)
-            codegen(code, tree, fullset, emptyp2, test, p1, valuetable)
-            local pcommit = addinstruction(code, ICommit, 0)
-            jumptohere(code, pchoice)
-            jumptohere(code, test)
-            codegen(code, tree, fl, opt, NOINST, p2, valuetable)
-            jumptohere(code, pcommit)
-        end
     end
 end
 
@@ -795,7 +792,17 @@ local function coderep(code, tree, opt, fl, index, valuetable)
         code.p[op].code = ISpan;
     else
         local e1, st = getfirst(tree, fullset, index, valuetable)
-        if not st then
+        if headfail(tree, index) or (e1 == 0 and cs_disjoint(st, fl)) then
+            -- L1: test (fail(p1)) -> L2; <p>; jmp L1; L2:
+            local test = codetestset(code, st, 0, valuetable)
+            codegen(code, tree, fullset, opt, test, index, valuetable)
+            local jmp = addinstruction(code, IJmp, 0)
+            jumptohere(code, test)
+            jumptothere(code, jmp, test)
+        else
+            -- test(fail(p1)) -> L2; choice L2; L1: <p>; partialcommit L1; L2:
+            -- or (if 'opt'): partialcommit L1; L1: <p>; partialcommit L1;
+            local test = codetestset(code, st, e1, valuetable)
             local pchoice = NOINST;
             if opt then
                 jumptohere(code, addinstruction(code, IPartialCommit, 0))
@@ -807,31 +814,7 @@ local function coderep(code, tree, opt, fl, index, valuetable)
             local commit = addinstruction(code, IPartialCommit, 0)
             jumptothere(code, commit, l2)
             jumptohere(code, pchoice)
-        else
-            if headfail(tree, index) or (e1 == 0 and cs_disjoint(st, fl)) then
-                -- L1: test (fail(p1)) -> L2; <p>; jmp L1; L2:
-                local test = codetestset(code, st, 0, valuetable)
-                codegen(code, tree, fullset, opt, test, index, valuetable)
-                local jmp = addinstruction(code, IJmp, 0)
-                jumptohere(code, test)
-                jumptothere(code, jmp, test)
-            else
-                -- test(fail(p1)) -> L2; choice L2; L1: <p>; partialcommit L1; L2:
-                -- or (if 'opt'): partialcommit L1; L1: <p>; partialcommit L1;
-                local test = codetestset(code, st, e1, valuetable)
-                local pchoice = NOINST;
-                if opt then
-                    jumptohere(code, addinstruction(code, IPartialCommit, 0))
-                else
-                    pchoice = addinstruction(code, IChoice, 0)
-                end
-                local l2 = code.size
-                codegen(code, tree, fullset, false, NOINST, index, valuetable)
-                local commit = addinstruction(code, IPartialCommit, 0)
-                jumptothere(code, commit, l2)
-                jumptohere(code, pchoice)
-                jumptohere(code, test)
-            end
+            jumptohere(code, test)
         end
     end
 end
@@ -845,24 +828,17 @@ end
 
 local function codenot(code, tree, index, valuetable)
     local e, st = getfirst(tree, fullset, index, valuetable)
-    if not st then
+    local test = codetestset(code, st, e, valuetable)
+    if headfail(tree, index) then -- test (fail(p1)) -> L1; fail; L1:
+        addinstruction(code, IFail, 0)
+    else
+        -- test(fail(p))-> L1; choice L1; <p>; failtwice; L1:
         local pchoice = addinstruction(code, IChoice, 0)
         codegen(code, tree, fullset, false, NOINST, index, valuetable)
         addinstruction(code, IFailTwice, 0)
         jumptohere(code, pchoice)
-    else
-        local test = codetestset(code, st, e, valuetable)
-        if headfail(tree, index) then -- test (fail(p1)) -> L1; fail; L1:
-            addinstruction(code, IFail, 0)
-        else
-            -- test(fail(p))-> L1; choice L1; <p>; failtwice; L1:
-            local pchoice = addinstruction(code, IChoice, 0)
-            codegen(code, tree, fullset, false, NOINST, index, valuetable)
-            addinstruction(code, IFailTwice, 0)
-            jumptohere(code, pchoice)
-        end
-        jumptohere(code, test)
     end
+    jumptohere(code, test)
 end
 
 
@@ -925,7 +901,6 @@ end
 local function codeseq(code, tree, fl, opt, tt, p1, p2, valuetable)
     if needfollow(tree, p1) then
         local _, fll = getfirst(tree, fl, p2, valuetable) -- p1 follow is p2 first
-        if not fll then fll = fullset end
         codegen(code, tree, fll, false, tt, p1, valuetable)
     else -- use 'fullset' as follow
         codegen(code, tree, fullset, false, tt, p1, valuetable)
