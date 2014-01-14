@@ -217,13 +217,25 @@ local function match(o, s, op, valuetable, ...)
             until s ~= FAIL and X ~= LRFAIL
         p = STACK[stackptr].p
         if p ~= FAIL then
+            for i = #valuetable, STACK[stackptr].valuetabletop + 1, -1 do
+                table.remove(valuetable)
+            end
             if X ~= VOID then
                 s = X
+                capturestackptr = capturestackptr - 1
+                CAPTURE = CAPTURESTACK[capturestackptr].capture
+                captop = CAPTURESTACK[capturestackptr].captop
+                maxcapture = CAPTURESTACK[capturestackptr].maxcapture
+                local capture = L[STACK[stackptr].pA + STACK[stackptr].s * maxpointer].capturecommit
+                while captop + capture.captop >= maxcapture do
+                    doublecapture()
+                end
+                ffi.copy(CAPTURE + captop, capture.capture, capture.captop * ffi.sizeof('CAPTURE'))
+                captop = captop + capture.captop
+                CAPTURESTACK[capturestackptr + 1] = nil
+                L[STACK[stackptr].pA + STACK[stackptr].s * maxpointer] = nil
             else
                 captop = STACK[stackptr].caplevel
-                for i = #valuetable, STACK[stackptr].valuetabletop + 1, -1 do
-                    table.remove(valuetable)
-                end
             end
         end
     end
