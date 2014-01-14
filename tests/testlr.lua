@@ -156,19 +156,28 @@ local def = {
     div = function(p1, p2) return p1 / p2 end,
     pow = function(p1, p2) return p1 ^ p2 end,
     uminus = function(p1) return -p1 end,
+    errfce = function(o, i)
+        local errstr = o .. '\n' .. (' '):rep(i) .. '^' .. '\n'
+        io.write(errstr)
+        return false
+    end,
 }
 
 local pat = [[
-     E <- (E:1 '+' E:2) -> plus /
-          (E:1 '-' E:2) -> minus /
-          (E:2 '*' E:3) -> mult /
-          (E:2 '/' E:3) -> div /
-          (E:3 '**' E:3) -> pow /
-          ('-' E:4)  -> uminus /
-          '(' E ')' /
-          {[0-9]+}
+     P <-  E s (!. / error)
+     s <- %s*
+     error <- '' => errfce
+     E <- (E:1 s'+' E:2) -> plus /
+          (E:1 s'-' E:2) -> minus /
+          (E:2 s'*' E:3) -> mult /
+          (E:2 s'/' E:3) -> div /
+          (E:3 s'**' E:3)-> pow /
+          (s'-' E:4) -> uminus /
+          s'(' E s')' /
+          s{[0-9]+} /
+          error
 ]]
 
 local pat = re.compile(pat, def)
-assert(re.match("-1*(6+2/4+3-1)**2", pat) == -72.25)
+assert(re.match("-1 * (6 + 2 / 4 + 3 - 1)**2", pat) == -72.25)
 
