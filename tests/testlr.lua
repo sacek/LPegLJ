@@ -133,3 +133,42 @@ local pat = m.P{
 }
 
 assert(pat:match("-1*(6+2/4+3-1)**2") == -72.25)
+
+
+local pat = m.P{
+    "E",
+    E = m.V("E", 1) * '+' * m.V("E", 2) / function(c1, c2) return c1 + c2 end +
+            m.V("E", 1) * '-' * m.V("E", 2) / function(c1, c2) return c1 - c2 end +
+            m.V("E", 2) * '*' * m.V("E", 3) / function(c1, c2) return c1 * c2 end +
+            m.V("E", 2) * '/' * m.V("E", 3) / function(c1, c2) return c1 / c2 end +
+            m.V("E", 3) * '**' * m.V("E", 3) / function(c1, c2) return c1 ^ c2 end +
+            '-' * m.V("E", 4) / function(c1) return -c1 end +
+            '(' * m.V("E") * ')' +
+            m.C(m.R'09' ^ 1),
+}
+
+assert(pat:match("-1*(6+2/4+3-1)**2") == -72.25)
+
+local def = {
+    plus = function(p1, p2) return p1 + p2 end,
+    minus = function(p1, p2) return p1 - p2 end,
+    mult = function(p1, p2) return p1 * p2 end,
+    div = function(p1, p2) return p1 / p2 end,
+    pow = function(p1, p2) return p1 ^ p2 end,
+    uminus = function(p1) return -p1 end,
+}
+
+local pat = [[
+     E <- (E:1 '+' E:2) -> plus /
+          (E:1 '-' E:2) -> minus /
+          (E:2 '*' E:3) -> mult /
+          (E:2 '/' E:3) -> div /
+          (E:3 '**' E:3) -> pow /
+          ('-' E:4)  -> uminus /
+          '(' E ')' /
+          {[0-9]+}
+]]
+
+local pat = re.compile(pat, def)
+assert(re.match("-1*(6+2/4+3-1)**2", pat) == -72.25)
+
