@@ -1038,7 +1038,7 @@ local function reducevaluetable(p)
     if p.code ~= nil then
         for i = 0, p.code.size - 1 do
             local code = p.code.p[i].code
-            if code == ICall then
+            if code == ICall or code == IJmp then
                 p.code.p[i].aux = check(p.code.p[i].aux)
             elseif code == ISet or code == ITestSet or code == ISpan then
                 p.code.p[i].val = check(p.code.p[i].val)
