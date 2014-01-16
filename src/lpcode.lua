@@ -328,11 +328,11 @@ local function checkaux(tree, pred, index, lrcall)
         return checkaux(tree, pred, index + 1, lrcall)
     elseif tag == TCall then
         if tree.p[index].cap ~= 0 then --left recursive rule
-            if lrcall[index] then
+            local lr = index + tree.p[index].ps
+            if lrcall[lr] then
                 return
-            else
-                lrcall[index] = true
             end
+            lrcall[lr] = true
         end
         return checkaux(tree, pred, index + tree.p[index].ps, lrcall)
     else
@@ -440,10 +440,11 @@ local function getfirst(tree, follow, index, valuetable, lrcall)
         end
     elseif tag == TCall then
         if tree.p[index].cap ~= 0 then -- left recursive rule
-            if lrcall[index] then
+            local lr = index + tree.p[index].ps
+            if lrcall[lr] then
                 return 0, settype()
             else
-                lrcall[index] = true
+                lrcall[lr] = true
             end
         end
         return getfirst(tree, follow, index + tree.p[index].ps, valuetable, lrcall)
@@ -487,10 +488,11 @@ local function headfail(tree, index, lrcall)
         return headfail(tree, index + 1, lrcall)
     elseif tag == TCall then
         if tree.p[index].cap ~= 0 then -- left recursive rule
-            if lrcall[index] then
+            local lr = index + tree.p[index].ps
+            if lrcall[lr] then
                 return true
             else
-                lrcall[index] = true
+                lrcall[lr] = true
             end
         end
         return headfail(tree, index + tree.p[index].ps, lrcall)
