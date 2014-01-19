@@ -327,7 +327,7 @@ local function checkaux(tree, pred, index, lrcall)
     elseif tag == TCapture or tag == TGrammar or tag == TRule then
         return checkaux(tree, pred, index + 1, lrcall)
     elseif tag == TCall then
-        if tree.p[index].cap ~= 0 then --left recursive rule
+        if bit.band(tree.p[index].cap, 0xffff) ~= 0 then --left recursive rule
             local lr = index + tree.p[index].ps
             if lrcall[lr] then
                 return
@@ -439,7 +439,7 @@ local function getfirst(tree, follow, index, valuetable, lrcall)
             return 0, firstset -- pattern inside capture ensures first can be used
         end
     elseif tag == TCall then
-        if tree.p[index].cap ~= 0 then -- left recursive rule
+        if bit.band(tree.p[index].cap, 0xffff) ~= 0 then -- left recursive rule
             local lr = index + tree.p[index].ps
             if lrcall[lr] then
                 return 0, settype()
@@ -487,7 +487,7 @@ local function headfail(tree, index, lrcall)
     elseif tag == TCapture or tag == TGrammar or tag == TRule or tag == TAnd then
         return headfail(tree, index + 1, lrcall)
     elseif tag == TCall then
-        if tree.p[index].cap ~= 0 then -- left recursive rule
+        if bit.band(tree.p[index].cap, 0xffff) ~= 0 then -- left recursive rule
             local lr = index + tree.p[index].ps
             if lrcall[lr] then
                 return true
@@ -853,7 +853,7 @@ local function correctcalls(code, positions, from, to)
             local n = code.p[i].offset; -- rule number
             local rule = positions[n]; -- rule position
             assert(rule == from or code.p[rule - 1].code == IRet)
-            if code.p[i].val == 0 and code.p[finaltarget(code, i + 1)].code == IRet then -- call; ret ?
+            if bit.band(code.p[i].val, 0xffff) == 0 and code.p[finaltarget(code, i + 1)].code == IRet then -- call; ret ?
                 code.p[i].code = IJmp; -- tail call
             else
                 code.p[i].code = ICall;

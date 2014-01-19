@@ -88,6 +88,8 @@ local Cgroup = 14
 
 local maxstack = 100
 local maxcapturedefault = 100
+local maxmemo = 1000
+local usememoization = false
 
 local FAIL = -1
 local LRFAIL = -1
@@ -102,6 +104,7 @@ int caplevel;
 int pA;
 int X;
 int valuetabletop;
+int memos;
 } STACK;
 
 typedef
@@ -173,12 +176,15 @@ local function match(o, s, op, valuetable, ...)
     local maxcapture = maxcapturedefault
     local stacklimit = maxstack
     local L = {}
+    local Memo1, Memo2 = {}, {}
+    local memoind = 0
     local maxpointer = 2 ^ math.ceil(math.log(op.size) / math.log(2))
 
     local p = 0 -- current instruction
     STACK[stackptr].s = s
     STACK[stackptr].p = FAIL
     STACK[stackptr].X = VOID
+    STACK[stackptr].memos = VOID
     stackptr = stackptr + 1
 
     local function doublecapture()
@@ -207,6 +213,10 @@ local function match(o, s, op, valuetable, ...)
             stackptr = stackptr - 1
             s = STACK[stackptr].s
             X = STACK[stackptr].X
+            if usememoization and s == FAIL and STACK[stackptr].memos ~= VOID then
+                Memo1[STACK[stackptr].pA + STACK[stackptr].memos * maxpointer] = FAIL
+                Memo2[STACK[stackptr].pA + STACK[stackptr].memos * maxpointer] = FAIL
+            end
             if X == LRFAIL then
                 CAPTURESTACK[capturestackptr] = nil
                 capturestackptr = capturestackptr - 1
@@ -270,6 +280,17 @@ local function match(o, s, op, valuetable, ...)
             if STACK[stackptr - 1].X == VOID then
                 stackptr = stackptr - 1
                 p = STACK[stackptr].p
+                if usememoization and STACK[stackptr].memos ~= VOID then
+                    local dif = captop - STACK[stackptr].caplevel
+                    local caps
+                    if dif > 0 then
+                        caps = ffi.new("CAPTURE[?]", dif)
+                        ffi.copy(caps, CAPTURE + captop - dif, dif * ffi.sizeof('CAPTURE'))
+                    end
+                    local val = { s, dif, caps }
+                    Memo1[STACK[stackptr].pA + STACK[stackptr].memos * maxpointer] = val
+                    Memo2[STACK[stackptr].pA + STACK[stackptr].memos * maxpointer] = val
+                end
             else
                 local X = STACK[stackptr - 1].X
                 if X == LRFAIL or s > X then
@@ -386,13 +407,44 @@ local function match(o, s, op, valuetable, ...)
             if stackptr == stacklimit then
                 doublestack()
             end
-            local k = op.p[p].val
+            local k = bit.band(op.p[p].val, 0xffff)
             if k == 0 then
-                STACK[stackptr].X = VOID
-                STACK[stackptr].s = FAIL
-                STACK[stackptr].p = p + 1 -- save return address
-                stackptr = stackptr + 1
-                p = p + op.p[p].offset
+                local pA = p + op.p[p].offset
+                local memo = Memo1[pA + s * maxpointer]
+                if usememoization and memo and type(memo) == 'table' then
+                    s = memo[1]
+                    local dif = memo[2]
+                    if dif > 0 then
+                        while captop + dif >= maxcapture do
+                            doublecapture()
+                        end
+                        local caps = memo[3]
+                        ffi.copy(CAPTURE + captop, caps, dif * ffi.sizeof('CAPTURE'))
+                        captop = captop + dif
+                    end
+                    p = p + 1
+                else
+                    STACK[stackptr].X = VOID
+                    STACK[stackptr].s = FAIL
+                    STACK[stackptr].p = p + 1 -- save return address
+                    STACK[stackptr].pA = pA
+                    STACK[stackptr].memos = s
+                    STACK[stackptr].caplevel = captop
+                    stackptr = stackptr + 1
+                    p = pA
+                    if usememoization then
+                        if not memo then
+                            memoind = memoind + 1
+                            if memoind > maxmemo then
+                                memoind = 0
+                                Memo1 = Memo2
+                                Memo2 = {}
+                            end
+                        elseif memo == FAIL then
+                            fail()
+                        end
+                    end
+                end
             else
                 local pA = p + op.p[p].offset
                 local X = L[pA + s * maxpointer]
@@ -446,6 +498,9 @@ local function match(o, s, op, valuetable, ...)
         elseif code == IFail then
             fail()
         elseif code == ICloseRunTime then
+            for i = 0, stackptr-1 do -- invalidate memo
+                STACK[i].memos = VOID
+            end
             local cs = {}
             cs.s = o
             cs.ocap = CAPTURE
@@ -504,9 +559,13 @@ local function setmax(val)
     end
 end
 
+local function enablememoization(val)
+    usememoization = val
+end
 -- ======================================================
 
 return {
     match = match,
-    setmax = setmax
+    setmax = setmax,
+    enablememoization = enablememoization
 }

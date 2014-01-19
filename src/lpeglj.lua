@@ -1308,6 +1308,7 @@ local pattreg = {
     ["setmaxstack"] = lp_setmax,
     ["type"] = lp_type,
     ["enableleftrecursion"] = lp_enableleftrecursion,
+    ["enablememoization"] = lpvm.enablememoization,
     ["save"] = lp_save,
     ["load"] = lp_load,
     ["__mul"] = lp_seq,
