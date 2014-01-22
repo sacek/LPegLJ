@@ -215,8 +215,8 @@ local function printinst(p, index, valuetable)
     elseif code == IJmp or code == ICall or code == ICommit or code == IChoice or
             code == IPartialCommit or code == IBackCommit or code == ITestAny then
         printjmp(p, index);
-        if code == ICall and p[index].aux > 0 then
-            io.write(' ',valuetable[p[index].aux])
+        if (code == ICall or code == IJmp) and p[index].aux > 0 then
+            io.write(' ', valuetable[p[index].aux])
         end
     end
     io.write("\n")
