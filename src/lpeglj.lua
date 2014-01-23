@@ -139,7 +139,8 @@ local PEleftrecursion = 2
 
 local newgrammar
 
-local RuleLR = 0x8000
+local RuleLR = 0x10000
+local Ruleused = 0x20000
 
 local LREnable = false
 
@@ -181,8 +182,7 @@ local function fixonecall(postable, grammar, index, valuetable)
     end
     grammar.p[index].tag = TCall;
     grammar.p[index].ps = n - index -- position relative to node
-    assert(grammar.p[index + grammar.p[index].ps].tag == TRule)
-    grammar.p[index + grammar.p[index].ps].val = grammar.p[index].val
+    grammar.p[index + grammar.p[index].ps].cap = bit.bor(grammar.p[index + grammar.p[index].ps].cap, Ruleused)
 end
 
 
@@ -837,6 +837,9 @@ local function buildgrammar(grammar, rules, n, index, valuetable)
         grammar.p[index].tag = TRule;
         grammar.p[index].cap = i; -- rule number
         grammar.p[index].ps = size + 1; -- point to next rule
+        local ind = #ktable + 1
+        ktable[ind] = rules[i * 2 - 1]
+        grammar.p[index].val = ind
         ffi.copy(grammar.p + index + 1, rules[i * 2].p, ffi.sizeof(treepatternelement) * size) -- copy rule
         ktable, offset = copykeys(ktable, valuetable[rules[i * 2].id])
         if offset > 0 then
@@ -966,6 +969,7 @@ end
 -- Give a name for the initial rule if it is not referenced
 
 local function initialrulename(grammar, val, valuetable)
+    grammar.p[1].cap = bit.bor(grammar.p[1].cap, Ruleused)
     if grammar.p[1].val == 0 then -- initial rule is not referenced?
         local ind = #valuetable + 1
         valuetable[ind] = val

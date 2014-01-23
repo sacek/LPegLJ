@@ -96,7 +96,7 @@ local Cgroup = 14
 
 local PEnullable = 0
 local PEnofail = 1
-local RuleLR = 0x8000
+local RuleLR = 0x10000
 local NOINST = -2
 
 

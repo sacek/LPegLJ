@@ -36,7 +36,8 @@ ffi.cdef[[
   int isprint ( int c );
 ]]
 
-local RuleLR = 0x8000
+local RuleLR = 0x10000
+local Ruleused = 0x20000
 
 -- {======================================================
 -- Printing patterns (for debugging)
@@ -300,8 +301,9 @@ local function printtree(tree, ident, index, valuetable)
         io.write((" cap: %s   n: %s\n"):format(modes[tree[index].cap], valuetable[tree[index].val]))
         printtree(tree, ident + 2, index + 1, valuetable);
     elseif tag == TRule then
-        local lr = bit.band(tree[index].cap, RuleLR) == RuleLR and 'left recursive' or ''
-        io.write((" n: %d  key: %s %s\n"):format(bit.band(tree[index].cap, bit.bnot(RuleLR)) - 1, valuetable[tree[index].val], lr))
+        local extra = bit.band(tree[index].cap, RuleLR) == RuleLR and ' left recursive' or ''
+        extra = extra .. (bit.band(tree[index].cap, Ruleused) ~= Ruleused and ' not used' or '')
+        io.write((" n: %d  key: %s%s\n"):format(bit.band(tree[index].cap, 0xffff) - 1, valuetable[tree[index].val], extra))
         printtree(tree, ident + 2, index + 1, valuetable);
         -- do not print next rule as a sibling
     elseif tag == TGrammar then
