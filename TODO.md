@@ -1,3 +1,6 @@
+### Memoization
+For complex grammars.
+
 ### Infinite parsing (for streams)
 Handle input buffers and captures.
 
