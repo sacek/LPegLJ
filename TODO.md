@@ -1,9 +1,3 @@
-### Memoization
-For complex grammars.
-
-### Infinite parsing (for streams)
-Handle input buffers and captures.
-
 ### Grammar checking
 #### Check PEG and left recursion rules for right order.
 

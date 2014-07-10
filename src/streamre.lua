@@ -4,6 +4,7 @@
 local tonumber, type, print, error = tonumber, type, print, error
 local setmetatable = setmetatable
 local m = require"lpeglj"
+m.match = m.emulatestreammatch  -- change standard match with stream emulation
 
 -- 'm' will be used to parse expressions, and 'mm' will be used to
 -- create expressions; that is, 're' runs on 'm', creating patterns
@@ -80,8 +81,8 @@ end
 
 
 local function patt_error (s, i)
-  local msg = (#s < i + 20) and s:sub(i)
-                             or s:sub(i,i+20) .. "..."
+  local msg = (#s(1,-1) < i + 20) and s(1,-1):sub(i)
+                             or s(1,-1):sub(i,i+20) .. "..."
   msg = ("pattern error near '%s'"):format(msg)
   error(msg, 2)
 end
@@ -99,7 +100,7 @@ end
 local function equalcap (s, i, c)
   if type(c) ~= "string" then return nil end
   local e = #c + i
-  if s:sub(i, e - 1) == c then return e else return nil end
+  if s(1,-1):sub(i, e - 1) == c then return e else return nil end
 end
 
 
@@ -220,15 +221,6 @@ local function match (s, p, i)
   return cp:match(s, i or 1)
 end
 
-local function streammatch (p, i)
-    local cp = mem[p]
-    if not cp then
-        cp = compile(p)
-        mem[p] = cp
-    end
-    return cp:streammatch(i or 1)
-end
-
 local function find (s, p, i)
   local cp = fmem[p]
   if not cp then
@@ -259,7 +251,6 @@ end
 local re = {
   compile = compile,
   match = match,
-  streammatch = streammatch,
   find = find,
   gsub = gsub,
   updatelocale = updatelocale,

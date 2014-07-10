@@ -1,4 +1,4 @@
-LPegLJ v.12.1
+LPegLJ v.12.2
 =============
 
 LPeg Parser in pure LuaJIT  
@@ -23,9 +23,11 @@ pattern:match("a")
 ### Compatibility:
 
 - full syntactical and functional backward compatibility with LPeg v.12
-- need LuaJIT 2.x  
+- works only with LuaJIT 2.x  
 
 ### Differences from LPeg v.12:
 
 - LPegLJ supports direct and indirect left recursion based on Sérgio Medeiros algorithm (http://arxiv.org/abs/1207.0443)
 - patterns can be saved and loaded
+- supports memoization (restricted) - useful for complex grammars
+- can be used in stream mode (infinite parsing)

@@ -34,7 +34,6 @@ local ffi = require"ffi"
 local lpcode = require"lpcode"
 local lpprint = require"lpprint"
 local lpvm = require"lpvm"
-local lpcap = require"lpcap"
 
 local band, bor, bnot, rshift, lshift = bit.band, bit.bor, bit.bnot, bit.rshift, bit.lshift
 
@@ -72,7 +71,7 @@ ffi.cdef[[
 
 local MAXBEHIND = 255
 local MAXRULES = 200
-local VERSION = "0.12.1LJ"
+local VERSION = "0.12.2LJ"
 
 local TChar = 0
 local TSet = 1
@@ -1107,13 +1106,45 @@ local function lp_match(pat, s, init, ...)
     local p = ffi.istype(treepattern, pat) and pat or getpatt(pat)
     local code = p.code ~= nil and p.code or prepcompile(p, 0)
     local i = initposition(s:len(), init) + 1
-    local r, capture = lpvm.match(s, i, code, valuetable[p.id], ...)
-    if not r then
-        return r
-    end
-    return lpcap.getcaptures(capture, s, r, valuetable[p.id], ...)
+    return select(2, lpvm.match(false, true, s, i, code, valuetable[p.id], ...))
 end
 
+
+local function lp_streammatch(pat, init, ...)
+    local p = ffi.istype(treepattern, pat) and pat or getpatt(pat)
+    local code = p.code ~= nil and p.code or prepcompile(p, 0)
+    local params = { ... }
+    local paramslength = select('#', ...)
+    local fce = coroutine.wrap(function(s, last)
+        return lpvm.match(true, last, s, init or 1, code, valuetable[p.id], unpack(params, 1, paramslength))
+    end)
+    return fce
+end
+
+local function retcount(...)
+    return select('#', ...), { ... }
+end
+
+local function lp_emulatestreammatch(pat, s, init, ...)   -- stream emulation (send first char and then rest of string)
+    local i = initposition(s:len(), init) + 1
+    local fce = lp_streammatch(pat, i, ...)
+    if #s > 1 then
+        local count1, ret1 = retcount(fce(s:sub(1, 1))) -- first char
+        if ret1[1] == -1 then
+            return -- fail
+        elseif ret1[1] == 0 then  -- no another data needed
+            return unpack(ret1, 2, count1)
+        else
+            local count2, ret2 = retcount(fce(s:sub(2, -1), true)) -- rest and ends
+            for i = 2, count2 do
+              ret1[count1 + i - 1] = ret2[i]
+            end
+            return unpack(ret1, 2, count1 + count2 - 1)
+        end
+    end
+
+    return select(2, fce(s, true))
+end
 
 -- {======================================================
 -- Library creation and functions not related to matching
@@ -1291,6 +1322,8 @@ local pattreg = {
     ["ptree"] = lp_printtree,
     ["pcode"] = lp_printcode,
     ["match"] = lp_match,
+    ["streammatch"] = lp_streammatch,
+    ["emulatestreammatch"] = lp_emulatestreammatch,
     ["B"] = lp_behind,
     ["V"] = lp_V,
     ["C"] = lp_simplecapture,

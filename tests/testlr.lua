@@ -12,6 +12,11 @@ local function checkeq(x, y, p)
     end
 end
 
+print"Tests for LPegLJ left recursion"
+
+assert(type(m.version()) == "string")
+print("version " .. m.version())
+
 m.enableleftrecursion(true)
 
 --[[
@@ -181,3 +186,4 @@ local pat = [[
 local pat = re.compile(pat, def)
 assert(re.match("-1 * (6 + 2 / 4 + 3 - 1)**2", pat) == -72.25)
 
+print"OK"

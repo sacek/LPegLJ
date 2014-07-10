@@ -2,7 +2,7 @@
 LPEGLJ
 lpvm.lua
 Virtual machine
-Copyright (C) 2013 Rostislav Sacek.
+Copyright (C) 2014 Rostislav Sacek.
 based on LPeg v0.12 - PEG pattern matching for Lua
 Lua.org & PUC-Rio  written by Roberto Ierusalimschy
 http://www.inf.puc-rio.br/~roberto/lpeg/
@@ -31,7 +31,7 @@ http://www.inf.puc-rio.br/~roberto/lpeg/
 
 local ffi = require"ffi"
 local lpcap = require"lpcap"
--- local lpprint = require"lpprint" --only for debug purpose
+local lpprint = require"lpprint" --only for debug purpose
 
 local band, rshift, lshift = bit.band, bit.rshift, bit.lshift
 
@@ -117,7 +117,7 @@ int kind;
 ]]
 
 
-local function resdyncaptures(fr, curr, limit)
+local function resdyncaptures(fr, curr, limit, checkstreamlen)
     local typ = type(fr)
     if not fr then -- false value?
         return FAIL -- and fail
@@ -125,7 +125,7 @@ local function resdyncaptures(fr, curr, limit)
         return curr -- keep current position
     else
         local res = fr -- new position
-        if res < curr or res > limit then
+        if res < curr or (limit and res > limit) or (not limit and checkstreamlen and not checkstreamlen(res - 2)) then
             error("invalid position returned by match-time capture", 0)
         end
         return res
@@ -163,7 +163,9 @@ end
 
 -- Opcode interpreter
 
-local function match(o, s, op, valuetable, ...)
+local function match(stream, last, o, s, op, valuetable, ...)
+    local arg = { ... }
+    local argcount = select('#', ...)
     local len = #o
     local ptr = ffi.cast('const unsigned char*', o)
     s = s - 1
@@ -181,11 +183,133 @@ local function match(o, s, op, valuetable, ...)
     local maxpointer = 2 ^ math.ceil(math.log(op.size) / math.log(2))
 
     local p = 0 -- current instruction
-    STACK[stackptr].s = s
+    STACK[stackptr].s = VOID
     STACK[stackptr].p = FAIL
     STACK[stackptr].X = VOID
     STACK[stackptr].memos = VOID
     stackptr = stackptr + 1
+
+    local streambufsize = 2 ^ 8
+    local streambufsizemask = streambufsize - 1 -- faster modulo
+    local streambufs = {}
+    local streambufoffset = 0
+    local streamstartbuffer = 0
+    local streambufferscount = 0
+
+    local function deletestreambuffers()
+        local min = math.huge
+        for i = stackptr - 1, 1, -1 do
+            local val = STACK[i].s
+            if val >= 0 then
+                min = math.min(val, min)
+            end
+        end
+
+        for i = captop - 1, 0, -1 do
+            local val = CAPTURE[i].s
+            if val >= 0 then
+                min = math.min(val, min)
+            end
+        end
+
+        for i = streamstartbuffer + 1, streambufoffset, streambufsize do
+            if i + streambufsize < min then
+                streambufs[i] = nil
+                streambufferscount = streambufferscount - 1
+            else
+                streamstartbuffer = i - 1
+                break
+            end
+        end
+    end
+
+    local function addstreamdata(s, last)
+        local len = #s
+        local srcoffset = 0
+        if streambufferscount > 128 then
+            deletestreambuffers()
+        end
+        repeat
+            local offset = bit.band(streambufoffset, streambufsizemask)
+            if offset > 0 then
+                local index = streambufoffset - offset + 1
+                local count = math.min(len, streambufsize - offset)
+                ffi.copy(streambufs[index] + offset, s:sub(srcoffset + 1, srcoffset + 1 + count), count)
+                len = len - count
+                srcoffset = srcoffset + count
+                streambufoffset = streambufoffset + count
+            end
+            if len > 0 then
+                local index = streambufoffset - (bit.band(streambufoffset, streambufsizemask)) + 1
+                local buf = ffi.new('unsigned char[?]', streambufsize)
+                streambufferscount = streambufferscount + 1
+                streambufs[index] = buf
+                local count = math.min(len, streambufsize)
+                ffi.copy(buf, s:sub(srcoffset + 1, srcoffset + 1 + count), count)
+                len = len - count
+                srcoffset = srcoffset + count
+                streambufoffset = streambufoffset + count
+            end
+        until len == 0
+    end
+
+    local function getstreamchar(s)
+        local offset = bit.band(s, streambufsizemask)
+        local index = s - offset + 1
+        return streambufs[index][offset]
+    end
+
+    local function getstreamstring(st, en) -- TODO Optimalize access
+        local str = {}
+        if last and en < 0 then
+            en = streambufoffset + en + 1
+        end
+
+        for i = st - 1, en - 1 do
+            --assert(checkstreamlen(i)) --TODO Range test
+            str[#str + 1] = string.char(getstreamchar(i))
+        end
+        return table.concat(str)
+    end
+
+    local function checkstreamlen(s)
+        local str
+        while true do
+            if s < streambufoffset then
+                return true
+            else
+                if last then
+                    return false
+                end
+
+                local min = math.huge
+                for i = stackptr - 1, 1, -1 do
+                    local val = STACK[i].caplevel
+                    if val >= 0 then
+                        min = math.min(val, min)
+                    end
+                end
+                local range = (min < math.huge) and min or captop
+
+                local n, out, outindex = lpcap.getcapturesruntime(CAPTURE, getstreamstring, range, valuetable, unpack(arg, 1, argcount))
+                if n > 0 then
+                    for i = 0, captop - n do
+                        ffi.copy(CAPTURE + i, CAPTURE + i + n, ffi.sizeof('CAPTURE'))
+                    end
+
+                    for i = stackptr - 1, 1, -1 do
+                        local val = STACK[i].caplevel
+                        if val >= 0 then
+                            STACK[i].caplevel = STACK[i].caplevel - n
+                        end
+                    end
+                    captop = captop - n
+                end
+                str, last = coroutine.yield(1, unpack(out, 1, outindex))
+                addstreamdata(str)
+            end
+        end
+    end
 
     local function doublecapture()
         maxcapture = maxcapture * 2
@@ -224,7 +348,7 @@ local function match(o, s, op, valuetable, ...)
                 maxcapture = CAPTURESTACK[capturestackptr].maxcapture
                 L[STACK[stackptr].pA + s * maxpointer] = nil
             end
-            until s ~= FAIL and X ~= LRFAIL
+        until s ~= FAIL and X ~= LRFAIL
         p = STACK[stackptr].p
         if p ~= FAIL then
             for i = #valuetable, STACK[stackptr].valuetabletop + 1, -1 do
@@ -261,7 +385,12 @@ local function match(o, s, op, valuetable, ...)
         STACK = NEWSTACK
     end
 
-
+    if stream then
+        addstreamdata(o)
+        len = nil
+        o = nil
+        ptr = nil
+    end
     while true do
         --[[ Only for debug
         io.write(("s: |%s| stck:%d, caps:%d  \n"):format(s + 1, stackptr, captop))
@@ -270,12 +399,12 @@ local function match(o, s, op, valuetable, ...)
             lpprint.printcaplist(CAPTURE, captop, valuetable)
         end
         --]]
-        if p == FAIL then return nil end
+        if p == FAIL then return -1 end
         local code = op.p[p].code
         if code == IEnd then
             CAPTURE[captop].kind = Cclose
             CAPTURE[captop].s = -1
-            return s + 1, CAPTURE
+            return 0, lpcap.getcaptures(CAPTURE, o, getstreamstring, s + 1, valuetable, ...)
         elseif code == IRet then
             if STACK[stackptr - 1].X == VOID then
                 stackptr = stackptr - 1
@@ -330,44 +459,44 @@ local function match(o, s, op, valuetable, ...)
                 end
             end
         elseif code == IAny then
-            if s < len then
+            if o and (s < len) or checkstreamlen(s) then
                 p = p + 1
                 s = s + 1
             else
                 fail()
             end
         elseif code == ITestAny then
-            if s < len then
+            if o and (s < len) or checkstreamlen(s) then
                 p = p + 1
             else
                 p = p + op.p[p].offset
             end
         elseif code == IChar then
-            if s < len and ptr[s] == op.p[p].val then
+            if o and (s < len and ptr[s] == op.p[p].val) or (checkstreamlen(s) and getstreamchar(s) == op.p[p].val) then
                 p = p + 1
                 s = s + 1
             else
                 fail()
             end
         elseif code == ITestChar then
-            if s < len and ptr[s] == op.p[p].val then
+            if o and (s < len and ptr[s] == op.p[p].val) or (checkstreamlen(s) and getstreamchar(s) == op.p[p].val) then
                 p = p + 1
             else
                 p = p + op.p[p].offset
             end
         elseif code == ISet then
-            local c = ptr[s]
+            local c = o and ptr[s] or (checkstreamlen(s) and getstreamchar(s))
             local set = valuetable[op.p[p].val]
-            if s < len and band(set[rshift(c, 5)], lshift(1, band(c, 31))) ~= 0 then
+            if (o and s < len or checkstreamlen(s)) and band(set[rshift(c, 5)], lshift(1, band(c, 31))) ~= 0 then
                 p = p + 1
                 s = s + 1
             else
                 fail()
             end
         elseif code == ITestSet then
-            local c = ptr[s]
+            local c = o and ptr[s] or (checkstreamlen(s) and getstreamchar(s))
             local set = valuetable[op.p[p].val]
-            if s < len and band(set[rshift(c, 5)], lshift(1, band(c, 31))) ~= 0 then
+            if (o and (s < len) or checkstreamlen(s)) and band(set[rshift(c, 5)], lshift(1, band(c, 31))) ~= 0 then
                 p = p + 1
             else
                 p = p + op.p[p].offset
@@ -381,8 +510,8 @@ local function match(o, s, op, valuetable, ...)
                 p = p + 1
             end
         elseif code == ISpan then
-            while s < len do
-                local c = ptr[s]
+            while o and (s < len) or checkstreamlen(s) do
+                local c = o and ptr[s] or getstreamchar(s)
                 local set = valuetable[op.p[p].val]
                 if band(set[rshift(c, 5)], lshift(1, band(c, 31))) == 0 then
                     break
@@ -498,18 +627,19 @@ local function match(o, s, op, valuetable, ...)
         elseif code == IFail then
             fail()
         elseif code == ICloseRunTime then
-            for i = 0, stackptr-1 do -- invalidate memo
+            for i = 0, stackptr - 1 do -- invalidate memo
                 STACK[i].memos = VOID
             end
             local cs = {}
             cs.s = o
+            cs.stream = getstreamstring
             cs.ocap = CAPTURE
-            cs.ptop = { ... }
-            cs.ptopcount = select('#', ...)
+            cs.ptop = arg
+            cs.ptopcount = argcount
             local out = { outindex = 0, out = {} }
             local n = lpcap.runtimecap(cs, captop, s + 1, out, valuetable) -- call function
             captop = captop - n
-            local res = resdyncaptures(out.out[1], s + 1, len + 1) -- get result
+            local res = resdyncaptures(out.out[1], s + 1, len and len + 1, checkstreamlen) -- get result
             if res == FAIL then -- fail?
                 fail()
             else
@@ -562,6 +692,7 @@ end
 local function enablememoization(val)
     usememoization = val
 end
+
 -- ======================================================
 
 return {

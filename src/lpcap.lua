@@ -2,7 +2,7 @@
 LPEGLJ
 lpcap.lua
 Capture functions
-Copyright (C) 2013 Rostislav Sacek.
+Copyright (C) 2014 Rostislav Sacek.
 based on LPeg v0.12 - PEG pattern matching for Lua
 Lua.org & PUC-Rio  written by Roberto Ierusalimschy
 http://www.inf.puc-rio.br/~roberto/lpeg/
@@ -70,6 +70,29 @@ local function findopen(cs, index)
 end
 
 
+local function checknextcap(cs,  captop)
+    local cap = cs.cap;
+    if cs.ocap[cap].siz == 0 then -- not a single capture?    ((cap)->siz != 0)
+        local n = 0; -- number of opens waiting a close
+        while true do -- look for corresponding close
+            cap = cap + 1
+            if cap > captop then return end
+            if cs.ocap[cap].kind == Cclose then
+                n = n - 1
+                if n + 1 == 0 then
+                    break;
+                end
+            elseif cs.ocap[cap].siz == 0 then
+                n = n + 1
+            end
+        end
+    end
+    cap = cap + 1; -- + 1 to skip last close (or entire single capture)
+    if cap > captop then return end
+    return true
+end
+
+
 -- Go to the next capture
 
 local function nextcap(cs)
@@ -105,7 +128,7 @@ local function pushnestedvalues(cs, addextra, out, valuetable)
         local st = cs.ocap[co].s
         local l = cs.ocap[co].siz - 1
         out.outindex = out.outindex + 1
-        out.out[out.outindex] = cs.s:sub(st, st + l - 1)
+        out.out[out.outindex] = cs.s and cs.s:sub(st, st + l - 1) or cs.stream(st, st + l - 1)
         return 1; -- that is it
     else
         local n = 0;
@@ -116,7 +139,7 @@ local function pushnestedvalues(cs, addextra, out, valuetable)
             local st = cs.ocap[co].s
             local l = cs.ocap[cs.cap].s - cs.ocap[co].s
             out.outindex = out.outindex + 1
-            out.out[out.outindex] = cs.s:sub(st, st + l - 1)
+            out.out[out.outindex] = cs.s and cs.s:sub(st, st + l - 1) or cs.stream(st, st + l - 1)
             n = n + 1
         end
         cs.cap = cs.cap + 1 -- skip close entry
@@ -297,7 +320,7 @@ local function runtimecap(cs, close, s, out, valuetable)
     local fce = valuetable[cs.ocap[cs.cap].idx] -- push function to be called
     local subout = { outindex = 0, out = {} }
     local n = pushnestedvalues(cs, false, subout, valuetable); -- push nested captures
-    local count, ret = retcount(fce(cs.s, s, unpack(subout.out, 1, n))) -- call dynamic function
+    local count, ret = retcount(fce(cs.s or cs.stream, s, unpack(subout.out, 1, n))) -- call dynamic function
     for i = 1, count do
         out.outindex = out.outindex + 1
         out.out[out.outindex] = ret[i]
@@ -363,7 +386,8 @@ local function stringcap(cs, b, valuetable)
             if l > n then
                 error(("invalid capture index (%d)"):format(l), 0)
             elseif cps[l + 1].isstring then
-                b[#b + 1] = cs.s:sub(cps[l + 1].startstr, cps[l + 1].endstr - cps[l + 1].startstr + cps[l + 1].startstr - 1)
+                b[#b + 1] = cs.s and cs.s:sub(cps[l + 1].startstr, cps[l + 1].endstr - cps[l + 1].startstr + cps[l + 1].startstr - 1) or
+                        cs.stream(cps[l + 1].startstr, cps[l + 1].endstr - cps[l + 1].startstr + cps[l + 1].startstr - 1)
             else
                 local curr = cs.cap;
                 cs.cap = cps[l + 1].origcap; -- go back to evaluate that nested capture
@@ -383,19 +407,22 @@ end
 local function substcap(cs, b, valuetable)
     local curr = cs.ocap[cs.cap].s;
     if cs.ocap[cs.cap].siz ~= 0 then -- no nested captures?
-        b[#b + 1] = cs.s:sub(curr, cs.ocap[cs.cap].siz - 1 + curr - 1) -- keep original text
+        b[#b + 1] = cs.s and cs.s:sub(curr, cs.ocap[cs.cap].siz - 1 + curr - 1) or
+                cs.stream(curr, cs.ocap[cs.cap].siz - 1 + curr - 1) -- keep original text
     else
         cs.cap = cs.cap + 1 -- skip open entry
         while cs.ocap[cs.cap].kind ~= Cclose do -- traverse nested captures
             local next = cs.ocap[cs.cap].s;
-            b[#b + 1] = cs.s:sub(curr, next - curr + curr - 1) -- add text up to capture
+            b[#b + 1] = cs.s and cs.s:sub(curr, next - curr + curr - 1) or
+                    cs.stream(curr, next - curr + curr - 1) -- add text up to capture
             if addonestring(cs, b, "replacement", valuetable) then
                 curr = cs.ocap[cs.cap - 1].s + cs.ocap[cs.cap - 1].siz - 1; -- continue after match
             else -- no capture value
                 curr = next; -- keep original text in final result
             end
         end
-        b[#b + 1] = cs.s:sub(curr, curr + cs.ocap[cs.cap].s - curr - 1); -- add last piece of text
+        b[#b + 1] = cs.s and cs.s:sub(curr, curr + cs.ocap[cs.cap].s - curr - 1) or
+                cs.stream(curr, curr + cs.ocap[cs.cap].s - curr - 1) -- add last piece of text
     end
     cs.cap = cs.cap + 1 -- go to next capture
 end
@@ -505,17 +532,18 @@ end
 -- Returns the number of results pushed. (If the list produces no
 -- results, push the final position of the match.)
 
-local function getcaptures(capture, s, r, valuetable, ...)
+local function getcaptures(capture, s, stream, r, valuetable, ...)
     local n = 0;
     local cs = { cap = 0 }
     local out = { outindex = 0; out = {} }
     if capture[cs.cap].kind ~= Cclose then -- is there any capture?
         cs.ocap = capture
         cs.s = s;
+        cs.stream = stream
         cs.ptopcount, cs.ptop = retcount(...)
         repeat -- collect their values
             n = n + pushcapture(cs, out, valuetable)
-            until cs.ocap[cs.cap].kind == Cclose
+        until cs.ocap[cs.cap].kind == Cclose
     end
     if n == 0 then -- no capture values?
         return r
@@ -523,9 +551,23 @@ local function getcaptures(capture, s, r, valuetable, ...)
     return unpack(out.out, 1, out.outindex)
 end
 
+local function getcapturesruntime(capture, stream, captop, valuetable, ...)
+    local n = 0;
+    local cs = { cap = 0 }
+    local out = { outindex = 0; out = {} }
+    cs.ocap = capture
+    cs.stream = stream
+    cs.ptopcount, cs.ptop = retcount(...)
+    repeat -- collect their values
+        if not checknextcap(cs,  captop) then break end
+        n = pushcapture(cs, out, valuetable)
+    until cs.cap == captop
+    return cs.cap, out.out, out.outindex
+end
 
 return {
     getcaptures = getcaptures,
     runtimecap = runtimecap,
+    getcapturesruntime = getcapturesruntime,
 }
 

@@ -1,3 +1,8 @@
+0.12.2 : July 10, 2014
+
+- added restricted memoization
+- stream support (infinite parsing)
+
 0.12.1 : December 30, 2013
 
 - speed improvement

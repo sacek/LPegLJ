@@ -6,6 +6,7 @@
 
 local m = require"lpeglj"
 
+m.match = m.emulatestreammatch  -- change standard match with stream emulation (send first char from string and then rest of string)
 
 -- for general use
 local a, b, c, d, e, f, g, p, t
@@ -53,7 +54,7 @@ end
 print"General tests for LPeg library"
 
 assert(type(m.version()) == "string")
-print("version " .. m.version())
+print("version " .. m.version() .. ' emulated stream mode')
 assert(m.type("alo") ~= "pattern")
 assert(m.type(io.input) ~= "pattern")
 assert(m.type(m.P"alo") == "pattern")
@@ -599,72 +600,79 @@ checkeq(x, {10, 20})
 
 assert(m.match(m.Cmt(m.Cg(m.Carg(3), "a") *
                      m.Cmt(m.Cb("a"), function (s,i,x)
-                                        assert(s == "a" and i == 1);
+                                        assert(s(1,-1) == "a" and i == 1);
                                         return i, x+1
                                       end) *
                      m.Carg(2), function (s,i,a,b,c)
-                                  assert(s == "a" and i == 1 and c == nil);
+                                  assert(s(1,-1) == "a" and i == 1 and c == nil);
 				  return i, 2*a + 3*b
                                 end) * "a",
                "a", 1, false, 100, 1000) == 2*1001 + 3*100)
 
 
 -- tests for Lua functions
-
+--[[  -- not supported - need whole input string
 t = {}
 s = ""
-p = m.P(function (s1, i) assert(s == s1); t[#t + 1] = i; return nil end) * false
+p = m.P(function (s1, i) assert(s == s1(1,-1)); t[#t + 1] = i; return nil end) * false
 s = "hi, this is a test"
 assert(m.match(((p - m.P(-1)) + 2)^0, s) == string.len(s) + 1)
 assert(#t == string.len(s)/2 and t[1] == 1 and t[2] == 3)
 
 assert(not m.match(p, s))
-
+--]]
 p = mt.__add(function (s, i) return i end, function (s, i) return nil end)
 assert(m.match(p, "alo"))
 
 p = mt.__mul(function (s, i) return i end, function (s, i) return nil end)
 assert(not m.match(p, "alo"))
 
-
+--[[  -- not supported - need whole input string
 t = {}
-p = function (s1, i) assert(s == s1); t[#t + 1] = i; return i end
+p = function (s1, i) assert(s == s1(1,-1)); t[#t + 1] = i; return i end
 s = "hi, this is a test"
 assert(m.match((m.P(1) * p)^0, s) == string.len(s) + 1)
 assert(#t == string.len(s) and t[1] == 2 and t[2] == 3)
 
 t = {}
-p = m.P(function (s1, i) assert(s == s1); t[#t + 1] = i;
-                         return i <= s1:len() and i end) * 1
+p = m.P(function (s1, i) assert(s == s1(1,-1)); t[#t + 1] = i;
+                         return i <= s1(1,-1):len() and i end) * 1
+--]]
 s = "hi, this is a test"
+--[[ -- not supported - need whole input string
 assert(m.match(p^0, s) == string.len(s) + 1)
 assert(#t == string.len(s) + 1 and t[1] == 1 and t[2] == 2)
 
-p = function (s1, i) return m.match(m.P"a"^1, s1, i) end
+p = function (s1, i) return m.match(m.P"a"^1, s1(1,-1), i) end
 assert(m.match(p, "aaaa") == 5)
 assert(m.match(p, "abaa") == 2)
 assert(not m.match(p, "baaa"))
-
+--]]
 assert(not pcall(m.match, function () return 2^20 end, s))
 assert(not pcall(m.match, function () return 0 end, s))
 assert(not pcall(m.match, function (s, i) return i - 1 end, s))
 assert(not pcall(m.match, m.P(1)^0 * function (_, i) return i - 1 end, s))
 assert(m.match(m.P(1)^0 * function (_, i) return i end * -1, s))
 assert(not pcall(m.match, m.P(1)^0 * function (_, i) return i + 1 end, s))
-assert(m.match(m.P(function (s, i) return s:len() + 1 end) * -1, s))
+--[[ -- not supported - need whole input string
+assert(m.match(m.P(function (s, i) return s(1,-1):len() + 1 end) * -1, s))
+--]]
 assert(not pcall(m.match, m.P(function (s, i) return s:len() + 2 end) * -1, s))
-assert(not m.match(m.P(function (s, i) return s:len() end) * -1, s))
+--[[ -- not supported - need whole input string
+assert(not m.match(m.P(function (s, i) return s(1,-1):len() end) * -1, s))
+--]]
 assert(m.match(m.P(1)^0 * function (_, i) return true end, s) ==
        string.len(s) + 1)
 for i = 1, string.len(s) + 1 do
   assert(m.match(function (_, _) return i end, s) == i)
 end
 
+--[[ -- not supported - need whole input string
 p = (m.P(function (s, i) return i%2 == 0 and i end) * 1
-  +  m.P(function (s, i) return i%2 ~= 0 and i + 2 <= s:len() and i end) * 3)^0
+  +  m.P(function (s, i) return i%2 ~= 0 and i + 2 <= s(1,-1):len() and i end) * 3)^0
   * -1
-assert(p:match(string.rep('a', 14000)))
-
+assert(p:match(string.rep('a', 1400)))
+--]]
 -- tests for Function Replacements
 f = function (a, ...) if a ~= "x" then return {a, ...} end end
 
@@ -920,13 +928,13 @@ checkeq(t, {'ab',
 
 
 -- tests for match-time captures
-
-p = m.P'a' * (function (s, i) return (s:sub(i, i) == 'b') and i + 1 end)
+--[[ -- not supported - need whole input string
+p = m.P'a' * (function (s, i) return (s(1,-1):sub(i, i) == 'b') and i + 1 end)
   + 'acd'
 
 assert(p:match('abc') == 3)
 assert(p:match('acd') == 4)
-
+--]]
 local function id (s, i, ...)
   return true, ...
 end
@@ -956,7 +964,7 @@ p = ((m.P(id) * 1 + m.Cmt(2, id) * 1  + m.Cmt(1, id) * 1))^0
 assert(table.concat{p:match('abababab')} == string.rep('137', 4))
 
 local function ref (s, i, x)
-  return m.match(x, s, i - x:len())
+  return m.match(x, s(1,-1), i - x:len())
 end
 
 assert(m.Cmt(m.P(1)^0, ref):match('alo') == 4)
@@ -1012,10 +1020,11 @@ assert(not c:match'[[]=]====]=]=]==]===[]')
 
 
 -- old bug: optimization of concat with fail removed match-time capture
-p = m.Cmt(0, function (s) p = s end) * m.P(false)
+--[[ -- not supported - need whole input string
+p = m.Cmt(0, function (s) p = s(1,-1) end) * m.P(false)
 assert(not p:match('alo'))
 assert(p == 'alo')
-
+--]]
 
 -- ensure that failed match-time captures are not kept on Lua stack
 do
@@ -1038,7 +1047,7 @@ end
 
 p = (m.P(function () return true, "a" end) * 'a'
   + m.P(function (s, i) return i, "aa", 20 end) * 'b'
-  + m.P(function (s,i) if i <= #s then return i, "aaa" end end) * 1)^0
+  + m.P(function (s,i) if i <= #s(1,-1) then return i, "aaa" end end) * 1)^0
 
 t = {p:match('abacc')}
 checkeq(t, {'a', 'aa', 20, 'a', 'aaa', 'aaa'})
@@ -1048,7 +1057,7 @@ checkeq(t, {'a', 'aa', 20, 'a', 'aaa', 'aaa'})
 -- Tests for 're' module
 -------------------------------------------------------------------
 
-local re = require "re"
+local re = require "streamre"
 
 local match, compile = re.match, re.compile
 
@@ -1383,5 +1392,3 @@ errmsg("'a' -", "near '-'")
 
 
 print"OK"
-
-
