@@ -51,6 +51,11 @@ re.match("-1*(6+2/4+3-1)**2", pat)
 *set* - enable memoization (true or false)
 
 ###Using stream:
+
+In stream mode all input data are copied into internal buffers. During parsing algorithm discards unused buffer (without link from stack or from captures stack).
+Captures are generated and removed from capture stack in this condition: capture are not in unsolved alternative and capture is not open (should be complete). 
+Algorithm generates only complete capture on highest level. Nested captures are generated after higher level captures are completed. 
+
 ####lpeglj.streammatch(pat, init, ...)
 *pat* - pattern   
 *init* - start position in stream (should be positive number)  
@@ -74,6 +79,7 @@ Restrictions and differences for stream mode:
 - using lpeg.B(patt) is not secure now (NYI) - input buffers can be deleted.
 - whole string argument in runtime captures (Cmt and function) is not string but function.
   This function takes two arguments (start and end index of string in stream) and return string. 
+- stream mode for re module NYI. 
  
 ###Example:
 ```Lua
