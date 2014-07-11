@@ -1,5 +1,5 @@
 local m = require"lpeglj"
-
+local re = require"re"
 
 local function checkeq(x, y, p)
     if p then print(x, y) end
@@ -84,6 +84,21 @@ ret = { fce("d") }
 checkeq(ret, { 1 })
 ret = { fce("", true) }
 checkeq(ret, { 0, 5 })
+
+local field = '"' * m.Cs(((m.P(1) - '"') + m.P'""' / '"')^0) * '"' +
+        m.C((1 - m.S',\n"')^0)
+
+local record = field * (',' * field)^0 * (m.P'\n' + -1)
+
+local fce = record:streammatch()
+ret = {fce('ab') }
+checkeq(ret, { 1 })
+ret = {fce('c') }
+checkeq(ret, { 1 })
+ret = {fce(',"def",')}
+checkeq(ret, { 1,'abc','def' })
+ret = {fce('x',true)}
+checkeq(ret, { 0,'x' })
 
 print('OK')
 
