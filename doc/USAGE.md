@@ -76,7 +76,6 @@ Returns **status** and captures or position.
 Restrictions and differences for stream mode:  
 
 - start position in stream should be positive number.
-- using lpeg.B(patt) is not secure now (NYI) - input buffers can be deleted.
 - whole string argument in runtime captures (Cmt and function) is not string but function.
   This function takes two arguments (start and end index of string in stream) and return string. 
  
