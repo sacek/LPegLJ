@@ -558,7 +558,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
                     STACK[stackptr].p = p + 1 -- save return address
                     STACK[stackptr].pA = pA
                     STACK[stackptr].memos = s
-                    STACK[stackptr].caplevel = captop
+                    STACK[stackptr].caplevel = VOID
                     stackptr = stackptr + 1
                     p = pA
                     if usememoization then

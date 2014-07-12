@@ -79,7 +79,6 @@ Restrictions and differences for stream mode:
 - using lpeg.B(patt) is not secure now (NYI) - input buffers can be deleted.
 - whole string argument in runtime captures (Cmt and function) is not string but function.
   This function takes two arguments (start and end index of string in stream) and return string. 
-- stream mode for re module NYI. 
  
 ###Example:
 ```Lua
