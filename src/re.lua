@@ -99,7 +99,11 @@ end
 local function equalcap (s, i, c)
   if type(c) ~= "string" then return nil end
   local e = #c + i
-  if s:sub(i, e - 1) == c then return e else return nil end
+  if type(s) == 'function' then  -- stream mode
+      if s(i, e - 1) == c then return e else return nil end
+  else
+      if s:sub(i, e - 1) == c then return e else return nil end
+  end
 end
 
 
@@ -229,6 +233,15 @@ local function streammatch (p, i)
     return cp:streammatch(i or 1)
 end
 
+local function emulatestreammatch(s, p, i)
+    local cp = mem[p]
+    if not cp then
+        cp = compile(p)
+        mem[p] = cp
+    end
+    return cp:emulatestreammatch(s, i or 1)
+end
+
 local function find (s, p, i)
   local cp = fmem[p]
   if not cp then
@@ -260,6 +273,7 @@ local re = {
   compile = compile,
   match = match,
   streammatch = streammatch,
+  emulatestreammatch = emulatestreammatch,
   find = find,
   gsub = gsub,
   updatelocale = updatelocale,
