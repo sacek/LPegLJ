@@ -109,6 +109,7 @@ int pA;
 int X;
 int valuetabletop;
 int memos;
+int call;
 } STACK;
 
 typedef
@@ -191,6 +192,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
     STACK[stackptr].p = FAIL
     STACK[stackptr].X = VOID
     STACK[stackptr].memos = VOID
+    STACK[stackptr].call = 0
     stackptr = stackptr + 1
 
     local streambufsize = 2 ^ 8
@@ -299,7 +301,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
 
                 local min = captop
                 for i = stackptr - 1, 1, -1 do
-                    local val = STACK[i].caplevel
+                    local val = STACK[i].call == 0 and STACK[i].caplevel or -1
                     if val >= 0 then
                         min = math.min(val, min)
                     end
@@ -543,6 +545,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
             STACK[stackptr].s = s
             STACK[stackptr].caplevel = captop
             STACK[stackptr].valuetabletop = #valuetable
+            STACK[stackptr].call = 0
             stackptr = stackptr + 1
             p = p + 1
         elseif code == ICall then
@@ -571,7 +574,8 @@ local function match(stream, last, o, s, op, valuetable, ...)
                     STACK[stackptr].p = p + 1 -- save return address
                     STACK[stackptr].pA = pA
                     STACK[stackptr].memos = s
-                    STACK[stackptr].caplevel = VOID
+                    STACK[stackptr].caplevel = captop
+                    STACK[stackptr].call = 1
                     stackptr = stackptr + 1
                     p = pA
                     if usememoization then
@@ -603,6 +607,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
                     STACK[stackptr].pA = pA
                     STACK[stackptr].s = s
                     STACK[stackptr].X = LRFAIL
+                    STACK[stackptr].call = 0
                     stackptr = stackptr + 1
                     p = pA
                 elseif X.X == LRFAIL or k < X.k then
