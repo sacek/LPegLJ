@@ -96,4 +96,20 @@ Function sets maximum position before current position. Buffer with this positio
 This function has meaning only for match-time captures which use first string argument. In this case 
 algorithm can not determinate range of requested string.       
 
+#### re module
 
+####re.streammatch (pat, init)
+*pat* - pattern   
+*init* - start position in stream (should be positive number)  
+
+Returns function **func**. This function is called with string data from stream.    
+  
+####func(str, eos)
+*str* - string input (string)  
+*eos* - end of stream (boolean)  
+Returns **status** and captures or position.     
+
+**Status**:  
+ 1 - need another data   
+-1 - parsing fail  
+ 0 - parsing finished    
