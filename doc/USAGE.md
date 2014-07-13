@@ -76,7 +76,7 @@ Returns **status** and captures or position.
 Restrictions and differences for stream mode:  
 
 - start position in stream should be positive number.
-- whole string argument in runtime captures (Cmt and function) is not string but function.
+- whole string argument in match-time captures (Cmt and function) is not string but function.
   This function takes two arguments (start and end index of string in stream) and return string. 
  
 ###Example:
@@ -89,5 +89,11 @@ local st, cap = fce("c") -- return 1 , "abc"  - capture and need another data
 local st, cap = fce("def") -- return 0 , "def"  - capture and finish parsing
 ```
 
+####lpeglj.setmaxbehind(val)
+*val* - max position before current position (number or nil for reset)
+
+Function sets maximum position before current position. Buffer with this position can not be deleted.
+This function has meaning only for match-time captures which use first string argument. In this case 
+algorithm can not determinate range of requested string.       
 
 

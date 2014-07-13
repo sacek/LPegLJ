@@ -100,7 +100,7 @@ local RuleLR = 0x10000
 local NOINST = -2
 
 
-local MAXBEHIND = 255
+local MAXBEHINDPREDICATE = 255
 local MAXRULES = 200
 local MAXOFF = 0xF
 
@@ -738,7 +738,7 @@ end
 
 local function codeand(code, tree, tt, index, valuetable)
     local n = fixedlenx(tree, 0, 0, index)
-    if n >= 0 and n <= MAXBEHIND and not hascaptures(tree, index) then
+    if n >= 0 and n <= MAXBEHINDPREDICATE and not hascaptures(tree, index) then
         codegen(code, tree, fullset, false, tt, index, valuetable)
         if n > 0 then
             addinstruction(code, IBehind, n)

@@ -45,8 +45,9 @@ local band, rshift, lshift = bit.band, bit.rshift, bit.lshift
 -- is the result; 'curr' is current subject position; 'limit'
 -- is subject's size.
 
-local MAXBEHIND = 255 -- max behind for Look-behind predicate
+local MAXBEHINDPREDICATE = 255 -- max behind for Look-behind predicate
 local MAXOFF = 0xF -- maximum for full capture
+local MAXBEHIND = math.max(MAXBEHINDPREDICATE, MAXOFF) -- maximum before current pos
 
 local IAny = 0 -- if no char, fail
 local IChar = 1 -- if char != val, fail
@@ -215,7 +216,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
             end
         end
         for i = streamstartbuffer + 1, streambufoffset, streambufsize do
-            if i + streambufsize + MAXBEHIND + MAXOFF < min then -- max behind for full capture and max behind for Look-behind predicate
+            if i + streambufsize + MAXBEHIND < min then -- max behind for full capture and max behind for Look-behind predicate
                 streambufs[i] = nil
                 streambufferscount = streambufferscount - 1
             else
@@ -701,6 +702,10 @@ local function setmax(val)
     end
 end
 
+local function setmaxbehind(val)
+    MAXBEHIND = math.max(MAXBEHINDPREDICATE, MAXOFF, val or 0)
+end
+
 local function enablememoization(val)
     usememoization = val
 end
@@ -710,5 +715,6 @@ end
 return {
     match = match,
     setmax = setmax,
+    setmaxbehind = setmaxbehind,
     enablememoization = enablememoization
 }

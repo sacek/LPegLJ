@@ -1154,10 +1154,13 @@ local function lp_setmax(val)
     lpvm.setmax(val)
 end
 
+local function lp_setmaxbehind(val)
+    lpvm.setmaxbehind(val)
+end
+
 local function lp_enableleftrecursion(val)
     LREnable = val
 end
-
 
 local function lp_version()
     return VERSION
@@ -1324,6 +1327,7 @@ local pattreg = {
     ["match"] = lp_match,
     ["streammatch"] = lp_streammatch,
     ["emulatestreammatch"] = lp_emulatestreammatch,
+    ["setmaxbehind"] = lp_setmaxbehind,
     ["B"] = lp_behind,
     ["V"] = lp_V,
     ["C"] = lp_simplecapture,
