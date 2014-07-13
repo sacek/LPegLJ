@@ -261,20 +261,32 @@ local function match(stream, last, o, s, op, valuetable, ...)
         return streambufs[index][offset]
     end
 
+    local checkstreamlen
+
     local function getstreamstring(st, en) -- TODO Optimalize access
         local str = {}
-        if last and en < 0 then
-            en = streambufoffset + en + 1
-        end
-
-        for i = st - 1, en - 1 do
-            --assert(checkstreamlen(i)) --TODO Range test
-            str[#str + 1] = string.char(getstreamchar(i))
+        local i = st >= 0 and st or 1
+        local to = en >= 0 and en or math.huge
+        while true do
+            if i > to then break end
+            checkstreamlen(i - 1)
+            if last and (st < 0 or en < 0) then
+                for j = i, streambufoffset do
+                    str[#str + 1] = string.char(getstreamchar(j - 1))
+                end
+                en = en < 0 and streambufoffset + en + 1 or en
+                en = st > 0 and en - st + 1 or en
+                st = st < 0 and streambufoffset + st + 1 or 1
+                return table.concat(str):sub(st, en)
+            else
+                str[#str + 1] = string.char(getstreamchar(i - 1))
+                i = i + 1
+            end
         end
         return table.concat(str)
     end
 
-    local function checkstreamlen(s)
+    function checkstreamlen(s)
         local str
         while true do
             if s < streambufoffset then

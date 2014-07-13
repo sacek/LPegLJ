@@ -611,7 +611,6 @@ assert(m.match(m.Cmt(m.Cg(m.Carg(3), "a") *
 
 
 -- tests for Lua functions
---[[  -- not supported - need whole input string
 t = {}
 s = ""
 p = m.P(function (s1, i) assert(s == s1(1,-1)); t[#t + 1] = i; return nil end) * false
@@ -620,14 +619,12 @@ assert(m.match(((p - m.P(-1)) + 2)^0, s) == string.len(s) + 1)
 assert(#t == string.len(s)/2 and t[1] == 1 and t[2] == 3)
 
 assert(not m.match(p, s))
---]]
 p = mt.__add(function (s, i) return i end, function (s, i) return nil end)
 assert(m.match(p, "alo"))
 
 p = mt.__mul(function (s, i) return i end, function (s, i) return nil end)
 assert(not m.match(p, "alo"))
 
---[[  -- not supported - need whole input string
 t = {}
 p = function (s1, i) assert(s == s1(1,-1)); t[#t + 1] = i; return i end
 s = "hi, this is a test"
@@ -637,9 +634,7 @@ assert(#t == string.len(s) and t[1] == 2 and t[2] == 3)
 t = {}
 p = m.P(function (s1, i) assert(s == s1(1,-1)); t[#t + 1] = i;
                          return i <= s1(1,-1):len() and i end) * 1
---]]
 s = "hi, this is a test"
---[[ -- not supported - need whole input string
 assert(m.match(p^0, s) == string.len(s) + 1)
 assert(#t == string.len(s) + 1 and t[1] == 1 and t[2] == 2)
 
@@ -647,32 +642,25 @@ p = function (s1, i) return m.match(m.P"a"^1, s1(1,-1), i) end
 assert(m.match(p, "aaaa") == 5)
 assert(m.match(p, "abaa") == 2)
 assert(not m.match(p, "baaa"))
---]]
 assert(not pcall(m.match, function () return 2^20 end, s))
 assert(not pcall(m.match, function () return 0 end, s))
 assert(not pcall(m.match, function (s, i) return i - 1 end, s))
 assert(not pcall(m.match, m.P(1)^0 * function (_, i) return i - 1 end, s))
 assert(m.match(m.P(1)^0 * function (_, i) return i end * -1, s))
 assert(not pcall(m.match, m.P(1)^0 * function (_, i) return i + 1 end, s))
---[[ -- not supported - need whole input string
 assert(m.match(m.P(function (s, i) return s(1,-1):len() + 1 end) * -1, s))
---]]
 assert(not pcall(m.match, m.P(function (s, i) return s:len() + 2 end) * -1, s))
---[[ -- not supported - need whole input string
 assert(not m.match(m.P(function (s, i) return s(1,-1):len() end) * -1, s))
---]]
 assert(m.match(m.P(1)^0 * function (_, i) return true end, s) ==
        string.len(s) + 1)
 for i = 1, string.len(s) + 1 do
   assert(m.match(function (_, _) return i end, s) == i)
 end
 
---[[ -- not supported - need whole input string
 p = (m.P(function (s, i) return i%2 == 0 and i end) * 1
   +  m.P(function (s, i) return i%2 ~= 0 and i + 2 <= s(1,-1):len() and i end) * 3)^0
   * -1
 assert(p:match(string.rep('a', 1400)))
---]]
 -- tests for Function Replacements
 f = function (a, ...) if a ~= "x" then return {a, ...} end end
 
@@ -928,13 +916,11 @@ checkeq(t, {'ab',
 
 
 -- tests for match-time captures
---[[ -- not supported - need whole input string
 p = m.P'a' * (function (s, i) return (s(1,-1):sub(i, i) == 'b') and i + 1 end)
   + 'acd'
 
 assert(p:match('abc') == 3)
 assert(p:match('acd') == 4)
---]]
 local function id (s, i, ...)
   return true, ...
 end
@@ -1020,11 +1006,9 @@ assert(not c:match'[[]=]====]=]=]==]===[]')
 
 
 -- old bug: optimization of concat with fail removed match-time capture
---[[ -- not supported - need whole input string
 p = m.Cmt(0, function (s) p = s(1,-1) end) * m.P(false)
 assert(not p:match('alo'))
 assert(p == 'alo')
---]]
 
 -- ensure that failed match-time captures are not kept on Lua stack
 do
