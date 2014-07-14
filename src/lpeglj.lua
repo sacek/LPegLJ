@@ -1214,6 +1214,7 @@ end
 local function lp_gc(ct)
     valuetable[ct.id] = nil
     if ct.code ~= nil then
+        ffi.C.free(ct.code.p)
         ffi.C.free(ct.code)
     end
 end
