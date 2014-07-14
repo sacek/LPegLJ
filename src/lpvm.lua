@@ -664,10 +664,11 @@ local function match(stream, last, o, s, op, valuetable, ...)
                 s = res - 1 -- else update current position
                 n = out.outindex - 1 -- number of new captures
                 if n > 0 then -- any new capture?
-                    captop = captop + n + 2
-                    while captop >= maxcapture do
+                    captop = captop + 1
+                    while captop + n + 1 >= maxcapture do
                         doublecapture()
                     end
+                    captop = captop + n + 1
                     -- add new captures to 'capture' list
                     adddyncaptures(s + 1, CAPTURE, captop - n - 2, n, out.out, valuetable)
                 end
