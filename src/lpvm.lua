@@ -473,49 +473,6 @@ local function match(stream, last, o, s, op, valuetable, ...)
                     L[STACK[stackptr].pA + STACK[stackptr].s * maxpointer] = nil
                 end
             end
-        elseif code == IAny then
-            if o and (s < len) or checkstreamlen(s) then
-                p = p + 1
-                s = s + 1
-            else
-                fail()
-            end
-        elseif code == ITestAny then
-            if o and (s < len) or checkstreamlen(s) then
-                p = p + 1
-            else
-                p = p + op.p[p].offset
-            end
-        elseif code == IChar then
-            if o and (s < len and ptr[s] == op.p[p].val) or (checkstreamlen(s) and getstreamchar(s) == op.p[p].val) then
-                p = p + 1
-                s = s + 1
-            else
-                fail()
-            end
-        elseif code == ITestChar then
-            if o and (s < len and ptr[s] == op.p[p].val) or (checkstreamlen(s) and getstreamchar(s) == op.p[p].val) then
-                p = p + 1
-            else
-                p = p + op.p[p].offset
-            end
-        elseif code == ISet then
-            local c = o and ptr[s] or (checkstreamlen(s) and getstreamchar(s))
-            local set = valuetable[op.p[p].val]
-            if (o and s < len or checkstreamlen(s)) and band(set[rshift(c, 5)], lshift(1, band(c, 31))) ~= 0 then
-                p = p + 1
-                s = s + 1
-            else
-                fail()
-            end
-        elseif code == ITestSet then
-            local c = o and ptr[s] or (checkstreamlen(s) and getstreamchar(s))
-            local set = valuetable[op.p[p].val]
-            if (o and (s < len) or checkstreamlen(s)) and band(set[rshift(c, 5)], lshift(1, band(c, 31))) ~= 0 then
-                p = p + 1
-            else
-                p = p + op.p[p].offset
-            end
         elseif code == IBehind then
             local n = op.p[p].val
             if n > s then
@@ -524,16 +481,6 @@ local function match(stream, last, o, s, op, valuetable, ...)
                 s = s - n
                 p = p + 1
             end
-        elseif code == ISpan then
-            while o and (s < len) or checkstreamlen(s) do
-                local c = o and ptr[s] or getstreamchar(s)
-                local set = valuetable[op.p[p].val]
-                if band(set[rshift(c, 5)], lshift(1, band(c, 31))) == 0 then
-                    break
-                end
-                s = s + 1
-            end
-            p = p + 1
         elseif code == IJmp then
             p = p + op.p[p].offset
         elseif code == IChoice then
@@ -695,8 +642,116 @@ local function match(stream, last, o, s, op, valuetable, ...)
             CAPTURE[captop].siz = band(rshift(op.p[p].val, 4), 0x0F) + 1 -- save capture size
             CAPTURE[captop].s = s + 1 - band(rshift(op.p[p].val, 4), 0x0F)
             pushcapture()
-        else
-            assert(false)
+        elseif o then -- standard mode
+            if code == IAny then
+                if s < len then
+                    p = p + 1
+                    s = s + 1
+                else
+                    fail()
+                end
+            elseif code == ITestAny then
+                if s < len then
+                    p = p + 1
+                else
+                    p = p + op.p[p].offset
+                end
+            elseif code == IChar then
+                if s < len and ptr[s] == op.p[p].val then
+                    p = p + 1
+                    s = s + 1
+                else
+                    fail()
+                end
+            elseif code == ITestChar then
+                if s < len and ptr[s] == op.p[p].val then
+                    p = p + 1
+                else
+                    p = p + op.p[p].offset
+                end
+            elseif code == ISet then
+                local c = ptr[s]
+                local set = valuetable[op.p[p].val]
+                if s < len and band(set[rshift(c, 5)], lshift(1, band(c, 31))) ~= 0 then
+                    p = p + 1
+                    s = s + 1
+                else
+                    fail()
+                end
+            elseif code == ITestSet then
+                local c = ptr[s]
+                local set = valuetable[op.p[p].val]
+                if s < len and band(set[rshift(c, 5)], lshift(1, band(c, 31))) ~= 0 then
+                    p = p + 1
+                else
+                    p = p + op.p[p].offset
+                end
+            elseif code == ISpan then
+                while s < len do
+                    local c = ptr[s]
+                    local set = valuetable[op.p[p].val]
+                    if band(set[rshift(c, 5)], lshift(1, band(c, 31))) == 0 then
+                        break
+                    end
+                    s = s + 1
+                end
+                p = p + 1
+            end
+        else -- stream mode
+            if code == IAny then
+                if checkstreamlen(s) then
+                    p = p + 1
+                    s = s + 1
+                else
+                    fail()
+                end
+            elseif code == ITestAny then
+                if checkstreamlen(s) then
+                    p = p + 1
+                else
+                    p = p + op.p[p].offset
+                end
+            elseif code == IChar then
+                if checkstreamlen(s) and getstreamchar(s) == op.p[p].val then
+                    p = p + 1
+                    s = s + 1
+                else
+                    fail()
+                end
+            elseif code == ITestChar then
+                if checkstreamlen(s) and getstreamchar(s) == op.p[p].val then
+                    p = p + 1
+                else
+                    p = p + op.p[p].offset
+                end
+            elseif code == ISet then
+                local c = checkstreamlen(s) and getstreamchar(s)
+                local set = valuetable[op.p[p].val]
+                if c and band(set[rshift(c, 5)], lshift(1, band(c, 31))) ~= 0 then
+                    p = p + 1
+                    s = s + 1
+                else
+                    fail()
+                end
+            elseif code == ITestSet then
+                local c = checkstreamlen(s) and getstreamchar(s)
+                local set = valuetable[op.p[p].val]
+                if c and band(set[rshift(c, 5)], lshift(1, band(c, 31))) ~= 0 then
+                    p = p + 1
+                else
+                    p = p + op.p[p].offset
+                end
+            elseif code == ISpan then
+                while checkstreamlen(s) do
+                    local c = getstreamchar(s)
+                    local set = valuetable[op.p[p].val]
+                    if band(set[rshift(c, 5)], lshift(1, band(c, 31))) == 0 then
+                        break
+                    end
+                    s = s + 1
+                end
+                p = p + 1
+            end
         end
     end
 end
