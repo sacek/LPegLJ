@@ -289,13 +289,14 @@ local function match(stream, last, o, s, op, valuetable, ...)
         return table.concat(str)
     end
 
-    function checkstreamlen(s)
+    function checkstreamlen(index)
         local str
         while true do
-            if s < streambufoffset then
+            if index < streambufoffset then
                 return true
             else
                 if last then
+                    s = streambufoffset
                     return false
                 end
 
