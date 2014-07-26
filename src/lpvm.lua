@@ -103,18 +103,18 @@ ffi.cdef[[
 typedef
 struct {
 int p;
-int s;
+double s;
 int caplevel;
 int pA;
-int X;
+double X;
 int valuetabletop;
-int memos;
+double memos;
 int call;
 } STACK;
 
 typedef
 struct {
-int s;
+double s;
 int siz;
 int idx;
 int kind;
@@ -254,6 +254,9 @@ local function match(stream, last, o, s, op, valuetable, ...)
                 len = len - count
                 srcoffset = srcoffset + count
                 streambufoffset = streambufoffset + count
+            end
+            if streambufoffset >= 10^14 then
+                error("too big input stream", 0)
             end
         until len == 0
     end
