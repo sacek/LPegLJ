@@ -255,7 +255,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
                 srcoffset = srcoffset + count
                 streambufoffset = streambufoffset + count
             end
-            if streambufoffset >= 10^14 then
+            if streambufoffset >= 2^52 then
                 error("too big input stream", 0)
             end
         until len == 0
