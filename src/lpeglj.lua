@@ -1290,8 +1290,9 @@ end
 
 local function lp_loadfile(fname, fcetab)
     local file = assert(io.open(fname, 'rb'))
-    lp_load(file:read("*a"), fcetab)
+    local pat = lp_load(file:read("*a"), fcetab)
     file:close()
+    return pat
 end
 
 local function lp_dump(ct, tree)
@@ -1385,6 +1386,7 @@ local pattreg = {
     ["save"] = lp_save,
     ["dump"] = lp_dump,
     ["load"] = lp_load,
+    ["loadfile"] = lp_loadfile,
     ["__mul"] = lp_seq,
     ["__add"] = lp_choice,
     ["__pow"] = lp_star,
