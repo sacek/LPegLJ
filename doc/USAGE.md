@@ -2,23 +2,36 @@ LPegLJ 0.12.2LJ
 ===========
 ## New functions:
 ###Loading and saving patterns:
-####pat:save(fname, tree)
+####pat:save(fname, [tree])
 Save pattern to file.
 
 fname - file name for pattern
-tree - full pattern tree is saved
-####pat:dump(tree)
+
+tree - full pattern tree is saved - later modification is possible
+####pat:dump([tree])
 Dump pattern to string.
  
-tree - full pattern tree is saved
-####lpeg.load(fname)
+tree - full pattern tree is saved - later modification is possible
+####lpeg.loadfile(fname, [fsymbols])
+Load pattern from file.
+
 fname - file name with pattern
+
+fsymbols - table with functions (key - symbolic name, value - function). This should be used only for functions with upvalues. 
+
+####lpeg.load(str, [fsymbols])
+Load pattern from memory.
+
+str - pattern in memory (string or ffi type)
+
+fsymbols - table with functions (key - symbolic name, value - function). This should be used only for functions with upvalues.
+
 ###Example:
 ```Lua
 local lpeglj = require"lpeglj"
 local pat = lpeglj.P('abc')
 pat:save("saved.pat")  -- save only pattern code
-local savedpat = lpeglj.load("saved.pat")
+local savedpat = lpeglj.loadfile("saved.pat")
 ```
 ###Left recursion:
 ####lpeglj.enableleftrecursion(set)

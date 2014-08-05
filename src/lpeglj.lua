@@ -1224,37 +1224,54 @@ local function lp_eq(ct1, ct2)
 end
 
 
-local function lp_load(fname, fcetab)
-    local file = assert(io.open(fname, 'rb'))
-    local patsize = ffi.cast('uint32_t*', file:read(4))[0]
-    local data = file:read(ffi.sizeof(treepatternelement) * patsize)
+local function lp_load(str, fcetab)
+    local index = 0
+    assert(str)
+    local ptr = ffi.cast('const char*', str)
+    local patsize = ffi.cast('uint32_t*', ptr + index)[0]
+    index = index + 4
+    local len = ffi.sizeof(treepatternelement) * patsize
     local pat = treepattern(patsize)
-    ffi.copy(pat.p, data, ffi.sizeof(treepatternelement) * patsize)
+    ffi.copy(pat.p, ptr + index, len)
+    index = index + len
     pat.code = pattern()
-    pat.code.size = ffi.cast('uint32_t*', file:read(4))[0]
-    local data = file:read(pat.code.size * ffi.sizeof(patternelement))
-    local count = ffi.cast('uint32_t*', file:read(4))[0]
+    pat.code.size = ffi.cast('uint32_t*', ptr + index)[0]
+    index = index + 4
+    local len = pat.code.size * ffi.sizeof(patternelement)
+    local data = ffi.string(ptr + index, len)
+    index = index + len
+    local count = ffi.cast('uint32_t*', ptr + index)[0]
+    index = index + 4
     local t = {}
     for i = 1, count do
-        local tag = file:read(3)
+        local tag = ffi.string(ptr + index, 3)
+        index = index + 3
         if tag == 'str' then --string
-            local len = ffi.cast('uint32_t*', file:read(4))[0]
-            local val = file:read(len)
+            local len = ffi.cast('uint32_t*', ptr + index)[0]
+            index = index + 4
+            local val = ffi.string(ptr + index, len)
+            index = index + len
             t[#t + 1] = val
         elseif tag == 'num' then --number
-            local len = ffi.cast('uint32_t*', file:read(4))[0]
-            local val = file:read(len)
+            local len = ffi.cast('uint32_t*', ptr + index)[0]
+            index = index + 4
+            local val = ffi.string(ptr + index, len)
+            index = index + len
             t[#t + 1] = tonumber(val)
         elseif tag == 'cdt' then --ctype
-            local data = file:read(ffi.sizeof(settype))
             local val = settype()
-            ffi.copy(val, data, ffi.sizeof(val))
+            ffi.copy(val, ptr + index, ffi.sizeof(settype))
+            index = index + ffi.sizeof(settype)
             t[#t + 1] = val
         elseif tag == 'fnc' then --function
-            local len = ffi.cast('uint32_t*', file:read(4))[0]
-            local fname = file:read(len)
-            len = ffi.cast('uint32_t*', file:read(4))[0]
-            local val = file:read(len)
+            local len = ffi.cast('uint32_t*', ptr + index)[0]
+            index = index + 4
+            local fname = ffi.string(ptr + index, len)
+            index = index + len
+            len = ffi.cast('uint32_t*', ptr + index)[0]
+            index = index + 4
+            local val = ffi.string(ptr + index, len)
+            index = index + len
             if fcetab and fcetab[fname] then
                 assert(type(fcetab[fname]) == 'function', ('"%s" is not function'):format(fname))
                 t[#t + 1] = fcetab[fname]
@@ -1263,13 +1280,18 @@ local function lp_load(fname, fcetab)
             end
         end
     end
-    file:close()
     valuetable[pat.id] = t
     pat.code.allocsize = pat.code.size
     pat.code.p = ffi.C.realloc(pat.code.p, ffi.sizeof(patternelement) * pat.code.allocsize)
     assert(pat.code.p ~= nil)
     ffi.copy(pat.code.p, data, ffi.sizeof(patternelement) * pat.code.allocsize)
     return pat
+end
+
+local function lp_loadfile(fname, fcetab)
+    local file = assert(io.open(fname, 'rb'))
+    lp_load(file:read("*a"), fcetab)
+    file:close()
 end
 
 local function lp_dump(ct, tree)
