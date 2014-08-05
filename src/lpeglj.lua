@@ -651,7 +651,7 @@ end
 -- Captures with syntax p / v
 -- (function capture, query capture, string capture, or number capture)
 
-local function lp_divcapture(pat, par)
+local function lp_divcapture(pat, par, xxx)
     local typ = type(par)
     if typ == "function" then
         return capture_aux(Cfunction, pat, par)
@@ -1125,19 +1125,19 @@ local function retcount(...)
     return select('#', ...), { ... }
 end
 
-local function lp_emulatestreammatch(pat, s, init, ...)   -- stream emulation (send first char and then rest of string)
+local function lp_emulatestreammatch(pat, s, init, ...) -- stream emulation (send first char and then rest of string)
     local i = initposition(s:len(), init) + 1
     local fce = lp_streammatch(pat, i, ...)
     if #s > 1 then
         local count1, ret1 = retcount(fce(s:sub(1, 1))) -- first char
         if ret1[1] == -1 then
             return -- fail
-        elseif ret1[1] == 0 then  -- no another data needed
+        elseif ret1[1] == 0 then -- no another data needed
             return unpack(ret1, 2, count1)
         else
             local count2, ret2 = retcount(fce(s:sub(2, -1), true)) -- rest and ends
             for i = 2, count2 do
-              ret1[count1 + i - 1] = ret2[i]
+                ret1[count1 + i - 1] = ret2[i]
             end
             return unpack(ret1, 2, count1 + count2 - 1)
         end
@@ -1272,52 +1272,58 @@ local function lp_load(fname, fcetab)
     return pat
 end
 
-local function lp_save(ct, fname, tree)
+local function lp_dump(ct, tree)
     local funccount = 0
     if ct.code == nil then -- not compiled yet?
         prepcompile(ct, 0)
     end
-    local file = assert(io.open(fname, 'wb'))
+    local out = {}
     if tree then
-        file:write(ffi.string(uint32(ct.treesize), 4))
-        file:write(ffi.string(ct.p, ffi.sizeof(treepatternelement) * ct.treesize))
+        out[#out + 1] = ffi.string(uint32(ct.treesize), 4)
+        out[#out + 1] = ffi.string(ct.p, ffi.sizeof(treepatternelement) * ct.treesize)
     else
-        file:write(ffi.string(uint32(0), 4))
+        out[#out + 1] = ffi.string(uint32(0), 4)
     end
-    file:write(ffi.string(uint32(ct.code.size), 4))
-    file:write(ffi.string(ct.code.p, ct.code.size * ffi.sizeof(patternelement)))
+    out[#out + 1] = ffi.string(uint32(ct.code.size), 4)
+    out[#out + 1] = ffi.string(ct.code.p, ct.code.size * ffi.sizeof(patternelement))
     local t = valuetable[ct.id]
     local len = t and #t or 0
-    file:write(ffi.string(uint32(len), 4))
+    out[#out + 1] = ffi.string(uint32(len), 4)
     if len > 0 then
         for _, val in ipairs(t) do
             local typ = type(val)
             if typ == 'string' then
-                file:write('str')
-                file:write(ffi.string(uint32(#val), 4))
-                file:write(val)
+                out[#out + 1] = 'str'
+                out[#out + 1] = ffi.string(uint32(#val), 4)
+                out[#out + 1] = val
             elseif typ == 'number' then
                 local val = tostring(val)
-                file:write('num')
-                file:write(ffi.string(uint32(#val), 4))
-                file:write(val)
+                out[#out + 1] = 'num'
+                out[#out + 1] = ffi.string(uint32(#val), 4)
+                out[#out + 1] = val
             elseif typ == 'cdata' then
-                file:write('cdt')
-                file:write(ffi.string(val, ffi.sizeof(val)))
+                out[#out + 1] = 'cdt'
+                out[#out + 1] = ffi.string(val, ffi.sizeof(val))
             elseif typ == 'function' then
-                file:write('fnc')
-                local name = funcnames[val] or ('FNAME%03d'):format(funccount)
+                out[#out + 1] = 'fnc'
                 funccount = funccount + 1
-                file:write(ffi.string(uint32(#name), 4))
-                file:write(name)
+                local name = funcnames[val] or ('FNAME%03d'):format(funccount)
+                out[#out + 1] = ffi.string(uint32(#name), 4)
+                out[#out + 1] = name
                 local data = string.dump(val, true)
-                file:write(ffi.string(uint32(#data), 4))
-                file:write(data)
+                out[#out + 1] = ffi.string(uint32(#data), 4)
+                out[#out + 1] = data
             else
-                error(("Type '%s' NYI for saving"):format(typ), 0)
+                error(("Type '%s' NYI for dump"):format(typ), 0)
             end
         end
     end
+    return table.concat(out)
+end
+
+local function lp_save(ct, fname, tree)
+    local file = assert(io.open(fname, 'wb'))
+    file:write(lp_dump(ct, tree))
     file:close()
 end
 
@@ -1352,6 +1358,7 @@ local pattreg = {
     ["enableleftrecursion"] = lp_enableleftrecursion,
     ["enablememoization"] = lpvm.enablememoization,
     ["save"] = lp_save,
+    ["dump"] = lp_dump,
     ["load"] = lp_load,
     ["__mul"] = lp_seq,
     ["__add"] = lp_choice,

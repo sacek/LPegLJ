@@ -1,9 +1,15 @@
-LPegLJ v.20
+LPegLJ 0.12.2LJ
 ===========
 ## New functions:
 ###Loading and saving patterns:
 ####pat:save(fname, tree)
+Save pattern to file.
+
 fname - file name for pattern
+tree - full pattern tree is saved
+####pat:dump(tree)
+Dump pattern to string.
+ 
 tree - full pattern tree is saved
 ####lpeg.load(fname)
 fname - file name with pattern
