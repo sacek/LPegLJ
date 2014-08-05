@@ -1310,6 +1310,9 @@ local function lp_dump(ct, tree)
                 local name = funcnames[val] or ('FNAME%03d'):format(funccount)
                 out[#out + 1] = ffi.string(uint32(#name), 4)
                 out[#out + 1] = name
+                if not funcnames[val] and debug.getupvalue(val, 1) then
+                    io.write(("Patterns function (%d) contains upvalue (%s) - use symbol name for function (%s).\n"):format(funccount, debug.getupvalue(val, 1), name), 0)
+                end
                 local data = string.dump(val, true)
                 out[#out + 1] = ffi.string(uint32(#data), 4)
                 out[#out + 1] = data
