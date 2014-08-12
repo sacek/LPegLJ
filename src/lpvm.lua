@@ -186,6 +186,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
     local Memo1, Memo2 = {}, {}
     local memoind = 0
     local maxpointer = 2 ^ math.ceil(math.log(op.size) / math.log(2))
+    local nocapturereleased = true
 
     local p = 0 -- current instruction
     STACK[stackptr].s = VOID
@@ -324,6 +325,9 @@ local function match(stream, last, o, s, op, valuetable, ...)
                     end
                     captop = captop - n
                 end
+                if outindex > 0 then
+                    nocapturereleased = false
+                end
                 str, last = coroutine.yield(1, unpack(out, 1, outindex))
                 addstreamdata(str)
             end
@@ -423,7 +427,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
         if code == IEnd then
             CAPTURE[captop].kind = Cclose
             CAPTURE[captop].s = -1
-            return 0, lpcap.getcaptures(CAPTURE, o, getstreamstring, s + 1, valuetable, ...)
+            return 0, lpcap.getcaptures(CAPTURE, o, getstreamstring, nocapturereleased and s + 1, valuetable, ...)
         elseif code == IRet then
             if STACK[stackptr - 1].X == VOID then
                 stackptr = stackptr - 1

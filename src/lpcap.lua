@@ -546,7 +546,11 @@ local function getcaptures(capture, s, stream, r, valuetable, ...)
         until cs.ocap[cs.cap].kind == Cclose
     end
     if n == 0 then -- no capture values?
-        return r
+        if not r then
+            return
+        else
+            return r
+        end
     end
     return unpack(out.out, 1, out.outindex)
 end
