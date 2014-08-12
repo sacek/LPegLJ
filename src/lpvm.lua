@@ -118,6 +118,7 @@ double s;
 int siz;
 int idx;
 int kind;
+int candelete;
 } CAPTURE;
 ]]
 
@@ -305,10 +306,22 @@ local function match(stream, last, o, s, op, valuetable, ...)
                 end
 
                 local min = captop
+                local minindex = math.huge
                 for i = stackptr - 1, 1, -1 do
                     local val = STACK[i].call == 0 and STACK[i].caplevel or -1
                     if val >= 0 then
+                        minindex = math.min(STACK[i].s, minindex)
                         min = math.min(val, min)
+                    end
+                end
+                for i = captop - 1, 0, -1 do
+                    if CAPTURE[i].kind == Cgroup and CAPTURE[i].idx > 0 and type(valuetable[CAPTURE[i].idx]) == 'string' then
+                        if minindex < CAPTURE[i].s then
+                            CAPTURE[i].candelete = 1
+                        end
+                        if CAPTURE[i].candelete ~= 1 then
+                            min = math.min(i, min)
+                        end
                     end
                 end
                 local n, out, outindex = lpcap.getcapturesruntime(CAPTURE, getstreamstring, min, valuetable, unpack(arg, 1, argcount))
@@ -346,6 +359,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
     local function pushcapture()
         CAPTURE[captop].idx = op.p[p].offset
         CAPTURE[captop].kind = band(op.p[p].val, 0x0f)
+        CAPTURE[captop].candelete = 0
         captop = captop + 1
         p = p + 1
         if captop >= maxcapture then
