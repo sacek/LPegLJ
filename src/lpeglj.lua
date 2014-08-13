@@ -140,6 +140,7 @@ local newgrammar
 
 local RuleLR = 0x10000
 local Ruleused = 0x20000
+local BCapcandelete = 0x30000
 
 local LREnable = false
 
@@ -1054,8 +1055,54 @@ local function reducevaluetable(p)
 end
 
 
+local function checkalt(tree)
+    local notchecked = {}
+    local notinalternativerules = {}
+
+    local function iter(tree, index, choice, rule)
+        local tag = tree[index].tag
+        if tag == TCapture and bit.band(tree[index].cap, 0xffff) == Cgroup then
+            if not choice then
+                if rule then
+                    notchecked[rule] = index
+                end
+            else
+                tree[index].cap = bit.bor(tree[index].cap, BCapcandelete)
+            end
+        elseif tag == TChoice then
+            choice = true
+        elseif tag == TRule then
+            rule = tree[index].val
+            if bit.band(tree[index].cap, 0xffff) - 1 == 0 then
+                notinalternativerules[rule] = notinalternativerules[rule] or true
+            end
+        elseif tag == TCall then
+            local r = tree[index].val
+            if not choice then
+                notinalternativerules[r] = notinalternativerules[r] or true
+            end
+        end
+        local sibs = numsiblings[tree[index].tag + 1] or 0
+        if sibs >= 1 then
+            iter(tree, index + 1, choice, rule)
+            if sibs >= 2 then
+                iter(tree, index + tree[index].ps, choice, rule)
+            end
+        end
+    end
+
+    iter(tree, 0)
+    for k, v in pairs(notchecked) do
+        if not notinalternativerules[k] then
+            tree[v].cap = bit.bor(tree[v].cap, BCapcandelete)
+        end
+    end
+end
+
+
 local function prepcompile(p, index)
     finalfix(false, nil, p, index, valuetable[p.id])
+    checkalt(p.p)
     lpcode.compile(p, index, valuetable[p.id])
     reducevaluetable(p)
     return p.code

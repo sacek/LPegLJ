@@ -298,7 +298,7 @@ local function printtree(tree, ident, index, valuetable)
         io.write((" %d\n"):format(tree[index].val))
         printtree(tree, ident + 2, index + 1, valuetable);
     elseif tag == TCapture then
-        io.write((" cap: %s   n: %s\n"):format(modes[tree[index].cap], valuetable[tree[index].val]))
+        io.write((" cap: %s   n: %s\n"):format(modes[bit.band(tree[index].cap, 0xffff)], valuetable[tree[index].val]))
         printtree(tree, ident + 2, index + 1, valuetable);
     elseif tag == TRule then
         local extra = bit.band(tree[index].cap, RuleLR) == RuleLR and ' left recursive' or ''
