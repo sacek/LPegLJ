@@ -1125,25 +1125,27 @@ local function retcount(...)
     return select('#', ...), { ... }
 end
 
-local function lp_emulatestreammatch(pat, s, init, ...) -- stream emulation (send first char and then rest of string)
+local function lp_emulatestreammatch(pat, s, init, ...) -- stream emulation (send all chars from string one char after char)
     local i = initposition(s:len(), init) + 1
     local fce = lp_streammatch(pat, i, ...)
-    if #s > 1 then
-        local count1, ret1 = retcount(fce(s:sub(1, 1))) -- first char
-        if ret1[1] == -1 then
+    local ret, count = {}, 0
+    for j = 1, #s do
+        local pcount, pret = retcount(fce(s:sub(j, j), j == #s)) -- one char
+        if pret[1] == -1 then
             return -- fail
-        elseif ret1[1] == 0 then -- no another data needed
-            return unpack(ret1, 2, count1)
-        else
-            local count2, ret2 = retcount(fce(s:sub(2, -1), true)) -- rest and ends
-            for i = 2, count2 do
-                ret1[count1 + i - 1] = ret2[i]
+        elseif pret[1] == 0 then -- parsing finished
+            for i = 2, pcount do -- collect result
+                ret[count + i - 1] = pret[i]
             end
-            return unpack(ret1, 2, count1 + count2 - 1)
+            count = count + pcount - 1
+            return unpack(ret, 1, count)
         end
+        for i = 2, pcount do
+            ret[count + i - 1] = pret[i]
+        end
+        count = count + pcount - 1
     end
-
-    return select(2, fce(s, true))
+    return select(2, fce(s, true)) -- empty string
 end
 
 -- {======================================================
