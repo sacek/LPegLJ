@@ -115,5 +115,28 @@ checkeq(ret, { 1, 'abc' })
 ret = { fce("def", true) }
 checkeq(ret, { 0, 'def' })
 
+local c = re.compile([[
+  s <-  ({(!longstring .)+} / longstring)*
+  longstring <- '[' {:init: '='* :} '[' close
+  close <- ']' =init ']' / . close
+]])
+
+local teststring = 'data1[=[insidedata1]=]data2[==[====]==]data3[[]]'
+
+local output = { 'data1', 'data2', 'data3' }
+
+local fce = c:streammatch()
+
+local index = 1
+
+for i = 1, #output do
+    local status, data
+    repeat
+        status, data = fce(teststring:sub(index, index), index == #teststring)
+        index = index + 1
+    until data or status ~= 1
+    checkeq(output[i], data)
+end
+
 print('OK')
 
