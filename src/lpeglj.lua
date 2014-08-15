@@ -2,7 +2,7 @@
 LPEGLJ
 lpeglj.lua
 Main module and tree generation
-Copyright (C) 2013 Rostislav Sacek.
+Copyright (C) 2014 Rostislav Sacek.
 based on LPeg v0.12 - PEG pattern matching for Lua
 Lua.org & PUC-Rio  written by Roberto Ierusalimschy
 http://www.inf.puc-rio.br/~roberto/lpeg/
@@ -38,9 +38,6 @@ local lpvm = require"lpvm"
 local band, bor, bnot, rshift, lshift = bit.band, bit.bor, bit.bnot, bit.rshift, bit.lshift
 
 ffi.cdef[[
- void *malloc( size_t size );
- void free( void *memblock );
- void *realloc( void *memblock, size_t size );
  int isalnum(int c);
  int isalpha(int c);
  int iscntrl(int c);
@@ -52,21 +49,6 @@ ffi.cdef[[
  int isspace(int c);
  int isupper(int c);
  int isxdigit(int c);
-]]
-
-ffi.cdef[[
-  typedef struct {
-                  int tag;
-                  int val;
-                  int ps;
-                  int cap;
-                 } TREEPATTERN_ELEMENT;
-  typedef struct {
-                  int id;
-                  int treesize;
-                  PATTERN *code;
-                  TREEPATTERN_ELEMENT p[?];
-                 } TREEPATTERN;
 ]]
 
 local MAXBEHIND = 255
@@ -1126,73 +1108,25 @@ local function lp_printcode(pat)
 end
 
 
--- Get the initial position for the match, interpreting negative
--- values from the end of the subject
-
-local function initposition(len, pos)
-    local ii = pos or 1
-    if (ii > 0) then -- positive index?
-        if ii <= len then -- inside the string?
-            return ii - 1; -- return it (corrected to 0-base)
-        else
-            return len; -- crop at the end
-        end
-    else -- negative index
-        if -ii <= len then -- inside the string?
-            return len + ii -- return position from the end
-        else
-            return 0; -- crop at the beginning
-        end
-    end
-end
-
-
 -- Main match function
 
 local function lp_match(pat, s, init, ...)
     local p = ffi.istype(treepattern, pat) and pat or getpatt(pat)
-    local code = p.code ~= nil and p.code or prepcompile(p, 0)
-    local i = initposition(s:len(), init) + 1
-    return select(2, lpvm.match(false, true, s, i, code, valuetable[p.id], ...))
+    p.code = p.code ~= nil and p.code or prepcompile(p, 0)
+    return lpvm.match(p, s, init, valuetable[p.id], ...)
 end
-
 
 local function lp_streammatch(pat, init, ...)
     local p = ffi.istype(treepattern, pat) and pat or getpatt(pat)
-    local code = p.code ~= nil and p.code or prepcompile(p, 0)
-    local params = { ... }
-    local paramslength = select('#', ...)
-    local fce = coroutine.wrap(function(s, last)
-        return lpvm.match(true, last, s, init or 1, code, valuetable[p.id], unpack(params, 1, paramslength))
-    end)
-    return fce
+    p.code = p.code ~= nil and p.code or prepcompile(p, 0)
+    return lpvm.streammatch(p, init, valuetable[p.id], ...)
 end
 
-local function retcount(...)
-    return select('#', ...), { ... }
-end
-
+-- Only for testing purpose
 local function lp_emulatestreammatch(pat, s, init, ...) -- stream emulation (send all chars from string one char after char)
-    local i = initposition(s:len(), init) + 1
-    local fce = lp_streammatch(pat, i, ...)
-    local ret, count = {}, 0
-    for j = 1, #s do
-        local pcount, pret = retcount(fce(s:sub(j, j), j == #s)) -- one char
-        if pret[1] == -1 then
-            return -- fail
-        elseif pret[1] == 0 then -- parsing finished
-            for i = 2, pcount do -- collect result
-                ret[count + i - 1] = pret[i]
-            end
-            count = count + pcount - 1
-            return unpack(ret, 1, count)
-        end
-        for i = 2, pcount do
-            ret[count + i - 1] = pret[i]
-        end
-        count = count + pcount - 1
-    end
-    return select(2, fce(s, true)) -- empty string
+    local p = ffi.istype(treepattern, pat) and pat or getpatt(pat)
+    p.code = p.code ~= nil and p.code or prepcompile(p, 0)
+    return lpvm.emulatestreammatch(p, s, init, valuetable[p.id], ...)
 end
 
 -- {======================================================
@@ -1272,75 +1206,15 @@ local function lp_eq(ct1, ct2)
     return tostring(ct1) == tostring(ct2)
 end
 
-
 local function lp_load(str, fcetab)
-    local index = 0
-    assert(str)
-    local ptr = ffi.cast('const char*', str)
-    local patsize = ffi.cast('uint32_t*', ptr + index)[0]
-    index = index + 4
-    local len = ffi.sizeof(treepatternelement) * patsize
-    local pat = treepattern(patsize)
-    ffi.copy(pat.p, ptr + index, len)
-    index = index + len
-    pat.code = pattern()
-    pat.code.size = ffi.cast('uint32_t*', ptr + index)[0]
-    index = index + 4
-    local len = pat.code.size * ffi.sizeof(patternelement)
-    local data = ffi.string(ptr + index, len)
-    index = index + len
-    local count = ffi.cast('uint32_t*', ptr + index)[0]
-    index = index + 4
-    local t = {}
-    for i = 1, count do
-        local tag = ffi.string(ptr + index, 3)
-        index = index + 3
-        if tag == 'str' then --string
-            local len = ffi.cast('uint32_t*', ptr + index)[0]
-            index = index + 4
-            local val = ffi.string(ptr + index, len)
-            index = index + len
-            t[#t + 1] = val
-        elseif tag == 'num' then --number
-            local len = ffi.cast('uint32_t*', ptr + index)[0]
-            index = index + 4
-            local val = ffi.string(ptr + index, len)
-            index = index + len
-            t[#t + 1] = tonumber(val)
-        elseif tag == 'cdt' then --ctype
-            local val = settype()
-            ffi.copy(val, ptr + index, ffi.sizeof(settype))
-            index = index + ffi.sizeof(settype)
-            t[#t + 1] = val
-        elseif tag == 'fnc' then --function
-            local len = ffi.cast('uint32_t*', ptr + index)[0]
-            index = index + 4
-            local fname = ffi.string(ptr + index, len)
-            index = index + len
-            len = ffi.cast('uint32_t*', ptr + index)[0]
-            index = index + 4
-            local val = ffi.string(ptr + index, len)
-            index = index + len
-            if fcetab and fcetab[fname] then
-                assert(type(fcetab[fname]) == 'function', ('"%s" is not function'):format(fname))
-                t[#t + 1] = fcetab[fname]
-            else
-                t[#t + 1] = loadstring(val)
-            end
-        end
-    end
+    local pat, t = lpvm.load(str, fcetab, true)
     valuetable[pat.id] = t
-    pat.code.allocsize = pat.code.size
-    pat.code.p = ffi.C.realloc(pat.code.p, ffi.sizeof(patternelement) * pat.code.allocsize)
-    assert(pat.code.p ~= nil)
-    ffi.copy(pat.code.p, data, ffi.sizeof(patternelement) * pat.code.allocsize)
     return pat
 end
 
 local function lp_loadfile(fname, fcetab)
-    local file = assert(io.open(fname, 'rb'))
-    local pat = lp_load(file:read("*a"), fcetab)
-    file:close()
+    local pat, t = lpvm.loadfile(fname, fcetab, true)
+    valuetable[pat.id] = t
     return pat
 end
 

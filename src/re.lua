@@ -1,7 +1,8 @@
 -- $Id: re.lua,v 1.44 2013/03/26 20:11:40 roberto Exp $
+-- 2014/08/15 changes rostislav
 
 -- imported functions and modules
-local tonumber, type, print, error = tonumber, type, print, error
+local tonumber, print, error = tonumber, print, error
 local setmetatable = setmetatable
 local m = require"lpeglj"
 
@@ -233,6 +234,7 @@ local function streammatch (p, i)
     return cp:streammatch(i or 1)
 end
 
+-- Only for testing purpose
 local function emulatestreammatch(s, p, i)
     local cp = mem[p]
     if not cp then

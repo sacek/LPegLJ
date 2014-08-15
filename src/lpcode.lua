@@ -29,6 +29,7 @@ http://www.inf.puc-rio.br/~roberto/lpeg/
 ** [ MIT license: http://www.opensource.org/licenses/mit-license.php ]
 --]]
 local ffi = require"ffi"
+require"lpvm"
 
 local band, bor, bnot, rshift, lshift = bit.band, bit.bor, bit.bnot, bit.rshift, bit.lshift
 
@@ -116,20 +117,6 @@ local numsiblings = {
     1, 1 -- capture, runtime capture
 }
 
-
-ffi.cdef[[
-  typedef struct {
-                  int code;
-                  int val;
-                  int offset;
-                  int aux;
-                 } PATTERN_ELEMENT;
-  typedef struct {
-                  int allocsize;
-                  int size;
-                  PATTERN_ELEMENT *p;
-                 } PATTERN;
-]]
 
 local patternelement = ffi.typeof('PATTERN_ELEMENT')
 local pattern = ffi.typeof('PATTERN')
