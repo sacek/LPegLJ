@@ -138,5 +138,50 @@ for i = 1, #output do
     checkeq(output[i], data)
 end
 
+local pat = m.C('a') * m.Cg('b', 'backref1') * m.C('c') * m.Cg('d', 'backref2') * m.C('e') * m.Cg('f', 'backref3') *
+        m.Cb('backref1') * m.C('g') * m.Cb('backref2') * m.C('h') * m.Cb('backref3') * m.C('i')
+local fce = pat:streammatch()
+
+ret = { fce("a") }
+checkeq(ret, { 1, 'a' })
+ret = { fce("b") }
+checkeq(ret, { 1 })
+ret = { fce("c") }
+checkeq(ret, { 1, "c" })
+ret = { fce("d") }
+checkeq(ret, { 1, })
+ret = { fce("e") }
+checkeq(ret, { 1, "e" })
+ret = { fce("f") }
+checkeq(ret, { 1, "b" })
+ret = { fce("g") }
+checkeq(ret, { 1, "g", "d" })
+ret = { fce("h") }
+checkeq(ret, { 1, "h", "f" })
+ret = { fce("i") }
+checkeq(ret, { 0, "i" })
+
+local pat = m.C('a') * (m.Cg(1, 'backref') * m.C('x1') * m.Cb('backref') + m.Cg(1, 'backref') * m.C('x2') * m.Cb('backref'))
+local fce = pat:streammatch()
+ret = { fce("a") }
+checkeq(ret, { 1, 'a' })
+ret = { fce("x") }
+checkeq(ret, { 1 })
+ret = { fce("x") }
+checkeq(ret, { 1 })
+ret = { fce("2") }
+checkeq(ret, { 0, 'x2', 'x' })
+
+
+local pat = m.C('a') * m.Ct(m.Cg('b', 'index')) * m.C('c')
+local fce = pat:streammatch()
+
+ret = { fce("a") }
+checkeq(ret, { 1, 'a' })
+ret = { fce("b") }
+checkeq(ret, { 1, { index = 'b' } })
+ret = { fce("c") }
+checkeq(ret, { 0, 'c' })
+
 print('OK')
 

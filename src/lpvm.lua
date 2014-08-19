@@ -345,19 +345,8 @@ local function match(stream, last, o, s, op, valuetable, ...)
                         min = math.min(val, min)
                     end
                 end
-                for i = captop - 1, 0, -1 do
-                    if CAPTURE[i].kind == Cgroup and CAPTURE[i].idx > 0 and type(valuetable[CAPTURE[i].idx]) == 'string' then
-                        if CAPTURE[i].candelete ~= 1 then
-                            min = math.min(i, min)
-                        end
-                    end
-                end
-                local n, out, outindex = lpcap.getcapturesruntime(CAPTURE, getstreamstring, min, valuetable, unpack(arg, 1, argcount))
+                local n, out, outindex = lpcap.getcapturesruntime(CAPTURE, getstreamstring, min, captop, valuetable, unpack(arg, 1, argcount))
                 if n > 0 then
-                    for i = 0, captop - n do
-                        ffi.copy(CAPTURE + i, CAPTURE + i + n, ffi.sizeof('CAPTURE'))
-                    end
-
                     for i = stackptr - 1, 1, -1 do
                         local val = STACK[i].caplevel
                         if val >= 0 then

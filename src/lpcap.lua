@@ -28,6 +28,7 @@ http://www.inf.puc-rio.br/~roberto/lpeg/
 **
 ** [ MIT license: http://www.opensource.org/licenses/mit-license.php ]
 --]]
+local ffi = require"ffi"
 
 local Cclose = 0
 local Cposition = 1
@@ -70,7 +71,7 @@ local function findopen(cs, index)
 end
 
 
-local function checknextcap(cs,  captop)
+local function checknextcap(cs, captop)
     local cap = cs.cap;
     if cs.ocap[cap].siz == 0 then -- not a single capture?    ((cap)->siz != 0)
         local n = 0; -- number of opens waiting a close
@@ -555,18 +556,29 @@ local function getcaptures(capture, s, stream, r, valuetable, ...)
     return unpack(out.out, 1, out.outindex)
 end
 
-local function getcapturesruntime(capture, stream, captop, valuetable, ...)
+local function getcapturesruntime(capture, stream, max, captop, valuetable, ...)
     local n = 0;
     local cs = { cap = 0 }
     local out = { outindex = 0; out = {} }
     cs.ocap = capture
     cs.stream = stream
     cs.ptopcount, cs.ptop = retcount(...)
+    local start = 0
     repeat -- collect their values
-        if not checknextcap(cs,  captop) then break end
-        n = pushcapture(cs, out, valuetable)
-    until cs.cap == captop
-    return cs.cap, out.out, out.outindex
+        if not checknextcap(cs, max) then break end
+        local notdelete = capture[cs.cap].kind == Cgroup and type(valuetable[capture[cs.cap].idx]) == 'string' and capture[cs.cap].candelete == 0
+        pushcapture(cs, out, valuetable)
+        if notdelete then
+            start = cs.cap
+        else
+            n = n + cs.cap - start
+            ffi.copy(capture + start, capture + cs.cap, ffi.sizeof('CAPTURE') * (captop - cs.cap))
+            max = max - (cs.cap - start)
+            captop = captop - (cs.cap - start)
+            cs.cap = start
+        end
+    until cs.cap == max
+    return n, out.out, out.outindex
 end
 
 return {
