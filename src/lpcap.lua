@@ -553,6 +553,7 @@ local function getcaptures(capture, s, stream, r, valuetable, ...)
             return r
         end
     end
+    assert(out.outindex < 7998, "(too many captures)")
     return unpack(out.out, 1, out.outindex)
 end
 
@@ -578,6 +579,7 @@ local function getcapturesruntime(capture, stream, max, captop, valuetable, ...)
             cs.cap = start
         end
     until cs.cap == max
+    assert(out.outindex < 7998, "(too many captures)")
     return n, out.out, out.outindex
 end
 
