@@ -128,13 +128,13 @@ typedef struct {
          } TREEPATTERN;
 
 typedef struct {
-          int p;
           double s;
+          double X;
+          double memos;
+          int p;
           int caplevel;
           int pA;
-          double X;
           int valuetabletop;
-          double memos;
           int call;
          } STACK;
 
