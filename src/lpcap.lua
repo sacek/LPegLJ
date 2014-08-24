@@ -573,7 +573,9 @@ local function getcapturesruntime(capture, stream, max, captop, valuetable, ...)
             start = cs.cap
         else
             n = n + cs.cap - start
-            ffi.copy(capture + start, capture + cs.cap, ffi.sizeof('CAPTURE') * (captop - cs.cap))
+            for i = 0, captop - cs.cap - 1 do
+                ffi.copy(capture + start + i, capture + cs.cap + i, ffi.sizeof('CAPTURE'))
+            end
             max = max - (cs.cap - start)
             captop = captop - (cs.cap - start)
             cs.cap = start
