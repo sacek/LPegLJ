@@ -85,7 +85,7 @@ Returns function **func**. This function is called with string data from stream.
 ####func(str, eos)
 *str* - string input (string)  
 *eos* - end of stream (boolean)  
-Returns **status** and captures or position.     
+Returns **status** and capture(s)(if available) or position.     
 
 **Status**:  
  1 - need another data   
