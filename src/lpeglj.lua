@@ -612,7 +612,7 @@ end
 local function auxemptycap(tree, cap, par, start)
     tree.p[start].tag = TCapture;
     tree.p[start].cap = cap
-    if par then
+    if type(par) ~= 'nil' then
         local ind = #valuetable[tree.id] + 1
         valuetable[tree.id][ind] = par
         tree.p[start].val = ind
@@ -625,7 +625,7 @@ end
 
 local function newemptycap(cap, par)
     local tree = treepattern(2)
-    if par then valuetable[tree.id] = {} end
+    if type(par) ~= 'nil' then valuetable[tree.id] = {} end
     auxemptycap(tree, cap, par, 0)
     return tree
 end
