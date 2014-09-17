@@ -331,14 +331,14 @@ local function match(stream, last, o, s, op, valuetable, ...)
                     s = streambufoffset
                     return false
                 end
-                local min = captop
+                local max = captop
                 for i = stackptr - 1, 0, -1 do
                     local val = STACK[i].call == 0 and STACK[i].caplevel or -1
                     if val >= 0 then
-                        min = math.min(val, min)
+                        max = math.min(val, max)
                     end
                 end
-                local n, out, outindex = lpcap.getcapturesruntime(CAPTURE, getstreamstring, min, captop, valuetable, unpack(arg, 1, argcount))
+                local n, out, outindex = lpcap.getcapturesruntime(CAPTURE, nil, getstreamstring, false, 0, max, captop, valuetable, unpack(arg, 1, argcount))
                 if n > 0 then
                     for i = stackptr - 1, 0, -1 do
                         local val = STACK[i].caplevel

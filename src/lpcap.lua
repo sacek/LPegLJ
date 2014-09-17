@@ -557,17 +557,18 @@ local function getcaptures(capture, s, stream, r, valuetable, ...)
     return unpack(out.out, 1, out.outindex)
 end
 
-local function getcapturesruntime(capture, stream, max, captop, valuetable, ...)
+local function getcapturesruntime(capture, s, stream, notdelete, min, max, captop, valuetable, ...)
     local n = 0;
-    local cs = { cap = 0 }
+    local cs = { cap = min }
     local out = { outindex = 0; out = {} }
     cs.ocap = capture
+    cs.s = s
     cs.stream = stream
     cs.ptopcount, cs.ptop = retcount(...)
     local start = 0
     repeat -- collect their values
         if not checknextcap(cs, max) then break end
-        local notdelete = capture[cs.cap].kind == Cgroup and type(valuetable[capture[cs.cap].idx]) == 'string' and capture[cs.cap].candelete == 0
+        local notdelete = notdelete or capture[cs.cap].kind == Cgroup and type(valuetable[capture[cs.cap].idx]) == 'string' and capture[cs.cap].candelete == 0
         pushcapture(cs, out, valuetable)
         if notdelete then
             start = cs.cap
