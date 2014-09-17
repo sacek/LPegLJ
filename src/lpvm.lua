@@ -342,7 +342,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
                 if n > 0 then
                     for i = stackptr - 1, 0, -1 do
                         local val = STACK[i].caplevel
-                        if val >= 0 then
+                        if val > 0 then
                             STACK[i].caplevel = STACK[i].caplevel - n
                         end
                     end
