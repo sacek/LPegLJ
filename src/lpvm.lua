@@ -394,7 +394,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
                 Memo1[STACK[stackptr].pA + STACK[stackptr].memos * maxpointer] = FAIL
                 Memo2[STACK[stackptr].pA + STACK[stackptr].memos * maxpointer] = FAIL
             end
-            if X == LRFAIL then
+            if X == LRFAIL then -- lvar.2 rest
                 CAPTURESTACK[capturestackptr] = nil
                 capturestackptr = capturestackptr - 1
                 CAPTURE = CAPTURESTACK[capturestackptr].capture
@@ -406,7 +406,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
         for i = #valuetable, STACK[stackptr].valuetabletop + 1, -1 do
             table.remove(valuetable)
         end
-        if X >= 0 then
+        if X >= 0 then -- inc.2
             s = X
             capturestackptr = capturestackptr - 1
             CAPTURE = CAPTURESTACK[capturestackptr].capture
@@ -473,7 +473,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
                 end
             else
                 local X = STACK[stackptr - 1].X
-                if X == LRFAIL or s > X then
+                if X == LRFAIL or s > X then -- lvar.1 inc.1
                     STACK[stackptr - 1].X = s
                     p = STACK[stackptr - 1].pA
                     s = STACK[stackptr - 1].s
@@ -487,7 +487,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
                     CAPTURE = ffi.new("CAPTURE[?]", maxcapturedefault)
                     CAPTURESTACK[capturestackptr] = { capture = CAPTURE, captop = captop, maxcapture = maxcapturedefault }
                     maxcapture = maxcapturedefault
-                else
+                else -- inc.3
                     stackptr = stackptr - 1
                     p = STACK[stackptr].p
                     s = STACK[stackptr].X
@@ -577,7 +577,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
             else
                 local pA = p + op.p[p].offset
                 local X = L[pA + s * maxpointer]
-                if not X then
+                if not X then -- lvar.1 lvar.2
                     CAPTURESTACK[capturestackptr].captop = captop
                     local capture = ffi.new("CAPTURE[?]", maxcapturedefault)
                     capturestackptr = capturestackptr + 1
@@ -593,9 +593,9 @@ local function match(stream, last, o, s, op, valuetable, ...)
                     STACK[stackptr].call = 0
                     stackptr = stackptr + 1
                     p = pA
-                elseif X.X == LRFAIL or k < X.k then
+                elseif X.X == LRFAIL or k < X.k then -- lvar.3 lvar.5
                     fail()
-                else
+                else -- lvar.4
                     local capture = X.capturecommit
                     while captop + capture.captop >= maxcapture do
                         doublecapture()
