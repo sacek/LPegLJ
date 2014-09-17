@@ -101,6 +101,8 @@ local usememoization = false
 local FAIL = -1
 local LRFAIL = -1
 local VOID = -2
+local CHOICE = -3
+local CALL = -4
 
 ffi.cdef[[
 typedef struct {
@@ -388,7 +390,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
             end
             s = STACK[stackptr].s
             X = STACK[stackptr].X
-            if usememoization and s == FAIL and STACK[stackptr].memos ~= VOID then
+            if usememoization and X == CALL and STACK[stackptr].memos ~= VOID then
                 Memo1[STACK[stackptr].pA + STACK[stackptr].memos * maxpointer] = FAIL
                 Memo2[STACK[stackptr].pA + STACK[stackptr].memos * maxpointer] = FAIL
             end
@@ -399,29 +401,27 @@ local function match(stream, last, o, s, op, valuetable, ...)
                 maxcapture = CAPTURESTACK[capturestackptr].maxcapture
                 L[STACK[stackptr].pA + s * maxpointer] = nil
             end
-        until s ~= FAIL and X ~= LRFAIL
+        until X == CHOICE or X >= 0
         p = STACK[stackptr].p
-        if p ~= FAIL then
-            for i = #valuetable, STACK[stackptr].valuetabletop + 1, -1 do
-                table.remove(valuetable)
+        for i = #valuetable, STACK[stackptr].valuetabletop + 1, -1 do
+            table.remove(valuetable)
+        end
+        if X >= 0 then
+            s = X
+            capturestackptr = capturestackptr - 1
+            CAPTURE = CAPTURESTACK[capturestackptr].capture
+            captop = CAPTURESTACK[capturestackptr].captop
+            maxcapture = CAPTURESTACK[capturestackptr].maxcapture
+            local capture = L[STACK[stackptr].pA + STACK[stackptr].s * maxpointer].capturecommit
+            while captop + capture.captop >= maxcapture do
+                doublecapture()
             end
-            if X ~= VOID then
-                s = X
-                capturestackptr = capturestackptr - 1
-                CAPTURE = CAPTURESTACK[capturestackptr].capture
-                captop = CAPTURESTACK[capturestackptr].captop
-                maxcapture = CAPTURESTACK[capturestackptr].maxcapture
-                local capture = L[STACK[stackptr].pA + STACK[stackptr].s * maxpointer].capturecommit
-                while captop + capture.captop >= maxcapture do
-                    doublecapture()
-                end
-                ffi.copy(CAPTURE + captop, capture.capture, capture.captop * ffi.sizeof('CAPTURE'))
-                captop = captop + capture.captop
-                CAPTURESTACK[capturestackptr + 1] = nil
-                L[STACK[stackptr].pA + STACK[stackptr].s * maxpointer] = nil
-            else
-                captop = STACK[stackptr].caplevel
-            end
+            ffi.copy(CAPTURE + captop, capture.capture, capture.captop * ffi.sizeof('CAPTURE'))
+            captop = captop + capture.captop
+            CAPTURESTACK[capturestackptr + 1] = nil
+            L[STACK[stackptr].pA + STACK[stackptr].s * maxpointer] = nil
+        else
+            captop = STACK[stackptr].caplevel
         end
     end
 
@@ -457,7 +457,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
             CAPTURE[captop].s = -1
             return 0, lpcap.getcaptures(CAPTURE, o, getstreamstring, nocapturereleased and s + 1, valuetable, ...)
         elseif code == IRet then
-            if STACK[stackptr - 1].X == VOID then
+            if STACK[stackptr - 1].X == CALL then
                 stackptr = stackptr - 1
                 p = STACK[stackptr].p
                 if usememoization and STACK[stackptr].memos ~= VOID then
@@ -523,7 +523,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
             if stackptr == stacklimit then
                 doublestack()
             end
-            STACK[stackptr].X = VOID
+            STACK[stackptr].X = CHOICE
             STACK[stackptr].p = p + op.p[p].offset
             STACK[stackptr].s = s
             STACK[stackptr].caplevel = captop
@@ -552,7 +552,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
                     end
                     p = p + 1
                 else
-                    STACK[stackptr].X = VOID
+                    STACK[stackptr].X = CALL
                     STACK[stackptr].s = FAIL
                     STACK[stackptr].p = p + 1 -- save return address
                     STACK[stackptr].pA = pA
