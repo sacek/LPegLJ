@@ -1306,6 +1306,7 @@ local pattreg = {
     ["type"] = lp_type,
     ["enableleftrecursion"] = lp_enableleftrecursion,
     ["enablememoization"] = lpvm.enablememoization,
+    ["enabletracing"] = lpvm.enabletracing,
     ["save"] = lp_save,
     ["dump"] = lp_dump,
     ["load"] = lp_load,

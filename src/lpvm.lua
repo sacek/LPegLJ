@@ -97,6 +97,7 @@ local maxstack = 100
 local maxcapturedefault = 100
 local maxmemo = 1000
 local usememoization = false
+local trace = false
 
 local FAIL = -1
 local LRFAIL = -1
@@ -232,6 +233,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
     local streambufoffset = 0
     local streamstartbuffer = 0
     local streambufferscount = 0
+    local level = -1
 
     local function deletestreambuffers()
         local min = s
@@ -379,6 +381,26 @@ local function match(stream, last, o, s, op, valuetable, ...)
         end
     end
 
+    local function traceenter(typ, par)
+        level = level + (par or 0)
+        io.write(('%s+%s %s\n'):format((' '):rep(level), typ, valuetable[op.p[p].aux]))
+    end
+
+    local function traceleave(inst)
+        io.write(('%s- %s\n'):format((' '):rep(level), valuetable[op.p[inst].aux]))
+        level = level - 1
+    end
+
+    local function tracematch(typ, start, par, from, to, inst, extra, ...)
+        local n, caps, capscount = lpcap.getcapturesruntime(CAPTURE, o, getstreamstring, true, start, captop, captop, valuetable, ...)
+        local capstr = {}
+        for i = 1, capscount do capstr[i] = tostring(caps[i]) end
+        extra = extra and '(' .. extra .. ')' or ''
+        io.write(('%s=%s %s%s %s %s \n'):format((' '):rep(level), typ, valuetable[op.p[inst].aux], extra,
+            o and o:sub(from, to) or getstreamstring(from, to), table.concat(capstr, " ")))
+        level = level - par
+    end
+
     local function fail()
         -- pattern failed: try to backtrack
         local X
@@ -401,12 +423,14 @@ local function match(stream, last, o, s, op, valuetable, ...)
                 maxcapture = CAPTURESTACK[capturestackptr].maxcapture
                 L[STACK[stackptr].pA + s * maxpointer] = nil
             end
+            if trace and (X == CALL or X == LRFAIL) then traceleave(STACK[stackptr].p - 1) end
         until X == CHOICE or X >= 0
         p = STACK[stackptr].p
         for i = #valuetable, STACK[stackptr].valuetabletop + 1, -1 do
             table.remove(valuetable)
         end
         if X >= 0 then -- inc.2
+            if trace then traceleave(STACK[stackptr].p - 1) end
             s = X
             capturestackptr = capturestackptr - 1
             CAPTURE = CAPTURESTACK[capturestackptr].capture
@@ -459,6 +483,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
         elseif code == IRet then
             if STACK[stackptr - 1].X == CALL then
                 stackptr = stackptr - 1
+                if trace then tracematch('', STACK[stackptr].caplevel, 1, STACK[stackptr].s + 1, s, STACK[stackptr].p - 1, nil, ...) end
                 p = STACK[stackptr].p
                 if usememoization and STACK[stackptr].memos ~= VOID then
                     local dif = captop - STACK[stackptr].caplevel
@@ -474,10 +499,12 @@ local function match(stream, last, o, s, op, valuetable, ...)
             else
                 local X = STACK[stackptr - 1].X
                 if X == LRFAIL or s > X then -- lvar.1 inc.1
+                    if trace then tracematch('IB', 0, 0, STACK[stackptr - 1].s + 1, s, STACK[stackptr - 1].p - 1, L[STACK[stackptr - 1].pA + STACK[stackptr - 1].s * maxpointer].level + 1, ...) end
                     STACK[stackptr - 1].X = s
                     p = STACK[stackptr - 1].pA
                     s = STACK[stackptr - 1].s
                     local lambda = L[p + s * maxpointer]
+                    lambda.level = lambda.level + 1
                     lambda.X = STACK[stackptr - 1].X
                     STACK[stackptr - 1].caplevel = captop
                     STACK[stackptr - 1].valuetabletop = #valuetable
@@ -505,6 +532,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
                     end
                     ffi.copy(CAPTURE + captop, capture.capture, capture.captop * ffi.sizeof('CAPTURE'))
                     captop = captop + capture.captop
+                    if trace then tracematch('', captop - capture.captop, 1, STACK[stackptr].s + 1, s, STACK[stackptr].p - 1, nil, ...) end
                     CAPTURESTACK[capturestackptr + 1] = nil
                     L[STACK[stackptr].pA + STACK[stackptr].s * maxpointer] = nil
                 end
@@ -518,6 +546,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
                 p = p + 1
             end
         elseif code == IJmp then
+            if trace and op.p[p].aux ~= 0 then traceenter('TC') end
             p = p + op.p[p].offset
         elseif code == IChoice then
             if stackptr == stacklimit then
@@ -540,10 +569,11 @@ local function match(stream, last, o, s, op, valuetable, ...)
                 local pA = p + op.p[p].offset
                 local memo = Memo1[pA + s * maxpointer]
                 if usememoization and memo then
+                    if trace then traceenter('M', 1) end
                     if memo == FAIL then
+                        if trace then traceleave(p) end
                         fail()
                     else
-                        s = memo[1]
                         local dif = memo[2]
                         if dif > 0 then
                             while captop + dif >= maxcapture do
@@ -553,9 +583,12 @@ local function match(stream, last, o, s, op, valuetable, ...)
                             ffi.copy(CAPTURE + captop, caps, dif * ffi.sizeof('CAPTURE'))
                             captop = captop + dif
                         end
+                        if trace then tracematch('M', captop - dif, 1, s + 1, memo[1], p, nil, ...) end
+                        s = memo[1]
                         p = p + 1
                     end
                 else
+                    if trace then traceenter('', 1) end
                     STACK[stackptr].X = CALL
                     STACK[stackptr].s = s
                     STACK[stackptr].p = p + 1 -- save return address
@@ -578,6 +611,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
                 local pA = p + op.p[p].offset
                 local X = L[pA + s * maxpointer]
                 if not X then -- lvar.1 lvar.2
+                    if trace then traceenter('', 1) end
                     CAPTURESTACK[capturestackptr].captop = captop
                     local capture = ffi.new("CAPTURE[?]", maxcapturedefault)
                     capturestackptr = capturestackptr + 1
@@ -585,7 +619,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
                     CAPTURE = capture
                     maxcapture = maxcapturedefault
                     captop = 0
-                    L[pA + s * maxpointer] = { X = LRFAIL, k = k, cs = capturestackptr }
+                    L[pA + s * maxpointer] = { X = LRFAIL, k = k, cs = capturestackptr, level = 0 }
                     STACK[stackptr].p = p + 1
                     STACK[stackptr].pA = pA
                     STACK[stackptr].s = s
@@ -807,6 +841,10 @@ local function enablememoization(val)
     usememoization = val
 end
 
+local function enabletracing(val)
+    trace = val
+end
+
 -- Get the initial position for the match, interpreting negative
 -- values from the end of the subject
 
@@ -975,5 +1013,6 @@ return {
     loadfile = lp_loadfile,
     setmax = setmax,
     setmaxbehind = setmaxbehind,
-    enablememoization = enablememoization
+    enablememoization = enablememoization,
+    enabletracing = enabletracing
 }
