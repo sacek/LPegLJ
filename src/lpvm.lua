@@ -311,7 +311,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
         local to = en >= 0 and en or math.huge
         while true do
             if i > to then break end
-            checkstreamlen(i - 1)
+            if not checkstreamlen(i - 1) then return end
             if last and (st < 0 or en < 0) then
                 for j = i, streambufoffset do
                     str[#str + 1] = string.char(getstreamchar(j - 1))
