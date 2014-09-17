@@ -240,7 +240,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
 
     local function deletestreambuffers()
         local min = s
-        for i = stackptr - 1, 1, -1 do
+        for i = stackptr - 1, 0, -1 do
             local val = STACK[i].s
             if val >= 0 then
                 min = math.min(val, min)
@@ -339,7 +339,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
                     return false
                 end
                 local min = captop
-                for i = stackptr - 1, 1, -1 do
+                for i = stackptr - 1, 0, -1 do
                     local val = STACK[i].call == 0 and STACK[i].caplevel or -1
                     if val >= 0 then
                         min = math.min(val, min)
@@ -347,7 +347,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
                 end
                 local n, out, outindex = lpcap.getcapturesruntime(CAPTURE, getstreamstring, min, captop, valuetable, unpack(arg, 1, argcount))
                 if n > 0 then
-                    for i = stackptr - 1, 1, -1 do
+                    for i = stackptr - 1, 0, -1 do
                         local val = STACK[i].caplevel
                         if val >= 0 then
                             STACK[i].caplevel = STACK[i].caplevel - n
@@ -389,6 +389,10 @@ local function match(stream, last, o, s, op, valuetable, ...)
         local X
         repeat -- remove pending calls
             stackptr = stackptr - 1
+            if stackptr == -1 then
+                p = FAIL
+                return
+            end
             s = STACK[stackptr].s
             X = STACK[stackptr].X
             if usememoization and s == FAIL and STACK[stackptr].memos ~= VOID then
