@@ -539,18 +539,22 @@ local function match(stream, last, o, s, op, valuetable, ...)
             if k == 0 then
                 local pA = p + op.p[p].offset
                 local memo = Memo1[pA + s * maxpointer]
-                if usememoization and memo and type(memo) == 'table' then
-                    s = memo[1]
-                    local dif = memo[2]
-                    if dif > 0 then
-                        while captop + dif >= maxcapture do
-                            doublecapture()
+                if usememoization and memo then
+                    if memo == FAIL then
+                        fail()
+                    else
+                        s = memo[1]
+                        local dif = memo[2]
+                        if dif > 0 then
+                            while captop + dif >= maxcapture do
+                                doublecapture()
+                            end
+                            local caps = memo[3]
+                            ffi.copy(CAPTURE + captop, caps, dif * ffi.sizeof('CAPTURE'))
+                            captop = captop + dif
                         end
-                        local caps = memo[3]
-                        ffi.copy(CAPTURE + captop, caps, dif * ffi.sizeof('CAPTURE'))
-                        captop = captop + dif
+                        p = p + 1
                     end
-                    p = p + 1
                 else
                     STACK[stackptr].X = CALL
                     STACK[stackptr].s = s
@@ -561,16 +565,12 @@ local function match(stream, last, o, s, op, valuetable, ...)
                     STACK[stackptr].call = 1
                     stackptr = stackptr + 1
                     p = pA
-                    if usememoization then
-                        if not memo then
-                            memoind = memoind + 1
-                            if memoind > maxmemo then
-                                memoind = 0
-                                Memo1 = Memo2
-                                Memo2 = {}
-                            end
-                        elseif memo == FAIL then
-                            fail()
+                    if usememoization and not memo then
+                        memoind = memoind + 1
+                        if memoind > maxmemo then
+                            memoind = 0
+                            Memo1 = Memo2
+                            Memo2 = {}
                         end
                     end
                 end
