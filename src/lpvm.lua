@@ -138,7 +138,6 @@ typedef struct {
           int caplevel;
           int pA;
           int valuetabletop;
-          int call;
          } STACK;
 
 typedef struct {
@@ -337,7 +336,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
                 end
                 local max = captop
                 for i = stackptr - 1, 0, -1 do
-                    local val = STACK[i].call == 0 and STACK[i].caplevel or -1
+                    local val = STACK[i].X == CHOICE and STACK[i].caplevel or -1
                     if val >= 0 then
                         max = math.min(val, max)
                     end
@@ -557,7 +556,6 @@ local function match(stream, last, o, s, op, valuetable, ...)
             STACK[stackptr].s = s
             STACK[stackptr].caplevel = captop
             STACK[stackptr].valuetabletop = #valuetable
-            STACK[stackptr].call = 0
             stackptr = stackptr + 1
             p = p + 1
         elseif code == ICall then
@@ -595,7 +593,6 @@ local function match(stream, last, o, s, op, valuetable, ...)
                     STACK[stackptr].pA = pA
                     STACK[stackptr].memos = s
                     STACK[stackptr].caplevel = captop
-                    STACK[stackptr].call = 1
                     stackptr = stackptr + 1
                     p = pA
                     if usememoization and not memo then
@@ -624,7 +621,6 @@ local function match(stream, last, o, s, op, valuetable, ...)
                     STACK[stackptr].pA = pA
                     STACK[stackptr].s = s
                     STACK[stackptr].X = LRFAIL
-                    STACK[stackptr].call = 0
                     stackptr = stackptr + 1
                     p = pA
                 elseif X.X == LRFAIL or k < X.k then -- lvar.3 lvar.5
