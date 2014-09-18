@@ -132,3 +132,34 @@ Returns **status** and captures or position.
  1 - need another data   
 -1 - parsing fail  
  0 - parsing finished    
+
+###Runtime tracing:  
+####lpeg.enabletracing(set)  
+*set* - enable tracing (true or false)   
+
+**Output format:**  
+####Rule entry:  
+indent '+'[typ] rulename  
+
+*indent* - nesting level  
+*typ* - type of call  
+- 'M' - memoized rule  
+- 'TC' - tail call  
+*rulename* - name of rule  
+
+####Rule match:  
+indent '='[typ] funcname [extra] subject [captures]  
+
+*indent* - nesting level  
+*typ* - type of call  
+- 'M' - memoized rule  
+- 'IB' - increment bound (for left recursion)  
+*extra* - additional info for left recursion - level of IB  
+*subject* - corresponding part of input string (or stream)  
+*captures* - corresponding part of runtime captures   
+
+####Rule leave (fail):  
+indent '-' rulename  
+
+*indent* - nesting level  
+*rulename* - name of rule  
