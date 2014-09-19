@@ -440,7 +440,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
             end
             ffi.copy(CAPTURE + captop, capture.capture, capture.captop * ffi.sizeof('CAPTURE'))
             captop = captop + capture.captop
-            if trace then tracematch('', captop - capture.captop, 1, STACK[stackptr].s + 1, s, STACK[stackptr].p - 1, nil, unpack(arg, 1, argcount)) end
+            if trace then tracematch('', captop - capture.captop, 1, STACK[stackptr].s + 1, s, STACK[stackptr].p - 1, L[STACK[stackptr].pA + STACK[stackptr].s * maxpointer].level, unpack(arg, 1, argcount)) end
             CAPTURESTACK[capturestackptr + 1] = nil
             L[STACK[stackptr].pA + STACK[stackptr].s * maxpointer] = nil
         else
@@ -531,7 +531,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
                     end
                     ffi.copy(CAPTURE + captop, capture.capture, capture.captop * ffi.sizeof('CAPTURE'))
                     captop = captop + capture.captop
-                    if trace then tracematch('', captop - capture.captop, 1, STACK[stackptr].s + 1, s, STACK[stackptr].p - 1, nil, ...) end
+                    if trace then tracematch('', captop - capture.captop, 1, STACK[stackptr].s + 1, s, STACK[stackptr].p - 1, L[STACK[stackptr].pA + STACK[stackptr].s * maxpointer].level, ...) end
                     CAPTURESTACK[capturestackptr + 1] = nil
                     L[STACK[stackptr].pA + STACK[stackptr].s * maxpointer] = nil
                 end
