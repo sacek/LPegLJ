@@ -429,7 +429,6 @@ local function match(stream, last, o, s, op, valuetable, ...)
             table.remove(valuetable)
         end
         if X >= 0 then -- inc.2
-            if trace then traceleave(STACK[stackptr].p - 1) end
             s = X
             capturestackptr = capturestackptr - 1
             CAPTURE = CAPTURESTACK[capturestackptr].capture
@@ -441,6 +440,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
             end
             ffi.copy(CAPTURE + captop, capture.capture, capture.captop * ffi.sizeof('CAPTURE'))
             captop = captop + capture.captop
+            if trace then tracematch('', captop - capture.captop, 1, STACK[stackptr].s + 1, s, STACK[stackptr].p - 1, nil, unpack(arg, 1, argcount)) end
             CAPTURESTACK[capturestackptr + 1] = nil
             L[STACK[stackptr].pA + STACK[stackptr].s * maxpointer] = nil
         else
