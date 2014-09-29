@@ -186,4 +186,22 @@ local pat = [[
 local pat = re.compile(pat, def)
 assert(re.match("-1 * (6 + 2 / 4 + 3 - 1)**2", pat) == -72.25)
 
+local pat = [[
+     A <-  B "a"
+     B <-  C "b"
+     C <-  B / A / "c"
+]]
+
+local pat = re.compile(pat)
+assert(re.match("cbbabbba", pat) == 9)
+
+local pat = [[
+     S <- A / B
+     A <- A "a" / B / "a"
+     B <- B "b" / A / "b"
+]]
+
+local pat = re.compile(pat)
+assert(re.match("baabbaaa", pat) == 9)
+
 print"OK"
