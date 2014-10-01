@@ -187,15 +187,24 @@ local function printjmp(p, index)
     io.write(("-> %d"):format(index + p[index].offset))
 end
 
+local function printrulename(p, index, rulenames)
+    if rulenames and rulenames[index + p[index].offset] then
+        io.write(' ', rulenames[index + p[index].offset])
+    end
+end
 
-local function printinst(p, index, valuetable)
+local function printinst(p, index, valuetable, rulenames)
     local code = p[index].code
-    io.write(("%02d: %s "):format(index, names[code]))
+    if rulenames and rulenames[index] then
+        io.write(rulenames[index], '\n')
+    end
+    io.write(("%04d: %s "):format(index, names[code]))
     if code == IChar then
         io.write(("'%s'"):format(string.char(p[index].val)))
     elseif code == ITestChar then
         io.write(("'%s'"):format(string.char(p[index].val)))
         printjmp(p, index)
+        printrulename(p, index, rulenames)
     elseif code == IFullCapture then
         printcapkind(band(p[index].val, 0x0f));
         io.write((" (size = %d)  (idx = %s)"):format(band(rshift(p[index].val, 4), 0xF), tostring(valuetable[p[index].offset])))
@@ -207,6 +216,7 @@ local function printinst(p, index, valuetable)
     elseif code == ITestSet then
         printcharset(valuetable[p[index].val])
         printjmp(p, index);
+        printrulename(p, index, rulenames)
     elseif code == ISpan then
         printcharset(valuetable[p[index].val]);
     elseif code == IOpenCall then
@@ -218,6 +228,8 @@ local function printinst(p, index, valuetable)
         printjmp(p, index);
         if (code == ICall or code == IJmp) and p[index].aux > 0 then
             io.write(' ', valuetable[p[index].aux])
+        else
+            printrulename(p, index, rulenames)
         end
     end
     io.write("\n")
@@ -225,8 +237,16 @@ end
 
 
 local function printpatt(p, valuetable)
+    local ruleNames = {}
     for i = 0, p.size - 1 do
-        printinst(p.p, i, valuetable);
+        local code = p.p[i].code
+        if (code == ICall or code == IJmp) and p.p[i].aux > 0 then
+            local index = i + p.p[i].offset
+            ruleNames[index] = valuetable[p.p[i].aux]
+        end
+    end
+    for i = 0, p.size - 1 do
+        printinst(p.p, i, valuetable, ruleNames)
     end
 end
 
