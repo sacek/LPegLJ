@@ -29,6 +29,7 @@ http://www.inf.puc-rio.br/~roberto/lpeg/
 ** [ MIT license: http://www.opensource.org/licenses/mit-license.php ]
 --]]
 
+assert(jit.version_num > 20000, "Use LuaJIT v2.0.1 or higher.")
 
 local ffi = require"ffi"
 local lpcode = require"lpcode"
