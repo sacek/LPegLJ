@@ -3,7 +3,7 @@ LPEGLJ
 lpvm.lua
 Virtual machine
 Copyright (C) 2014 Rostislav Sacek.
-based on LPeg v0.12 - PEG pattern matching for Lua
+based on LPeg v1.0 - PEG pattern matching for Lua
 Lua.org & PUC-Rio  written by Roberto Ierusalimschy
 http://www.inf.puc-rio.br/~roberto/lpeg/
 
@@ -29,8 +29,8 @@ http://www.inf.puc-rio.br/~roberto/lpeg/
 ** [ MIT license: http://www.opensource.org/licenses/mit-license.php ]
 --]]
 
-local ffi = require"ffi"
-local lpcap = require"lpcap"
+local ffi = require "ffi"
+local lpcap = require "lpcap"
 --[[ Only for debug purpose
 local lpprint = require"lpprint"
 --]]
@@ -50,6 +50,7 @@ local band, rshift, lshift = bit.band, bit.rshift, bit.lshift
 local MAXBEHINDPREDICATE = 255 -- max behind for Look-behind predicate
 local MAXOFF = 0xF -- maximum for full capture
 local MAXBEHIND = math.max(MAXBEHINDPREDICATE, MAXOFF) -- maximum before current pos
+local INITBACK = 400 -- default maximum size for call/backtrack stack
 
 local IAny = 0 -- if no char, fail
 local IChar = 1 -- if char != val, fail
@@ -93,7 +94,7 @@ local Cruntime = 13
 local Cgroup = 14
 
 local BCapcandelete = 0x30000
-local maxstack = 100
+local maxstack = INITBACK
 local maxcapturedefault = 100
 local maxmemo = 1000
 local usememoization = false
@@ -105,7 +106,7 @@ local VOID = -2
 local CHOICE = -3
 local CALL = -4
 
-ffi.cdef[[
+ffi.cdef [[
 typedef struct {
           int code;
           int val;
@@ -161,9 +162,11 @@ local settype = ffi.typeof('int32_t[8]')
 
 local function resdyncaptures(fr, curr, limit, checkstreamlen)
     local typ = type(fr)
-    if not fr then -- false value?
+    -- false value?
+    if not fr then
         return FAIL -- and fail
-    elseif typ == 'boolean' then -- true?
+    elseif typ == 'boolean' then
+        -- true?
         return curr -- keep current position
     else
         local res = fr -- new position
@@ -187,7 +190,8 @@ local function adddyncaptures(s, base, index, n, fd, valuetable)
     valuetable[ind] = 0
     base[index].idx = ind -- make it an anonymous group
     base[index + 1] = {}
-    for i = 1, n do -- add runtime captures
+    -- add runtime captures
+    for i = 1, n do
         base[index + i].kind = Cruntime
         base[index + i].siz = 1 -- mark it as closed
         ind = #valuetable + 1
@@ -213,12 +217,12 @@ local function match(stream, last, o, s, op, valuetable, ...)
     s = s - 1
     local stackptr = 0 -- point to first empty slot in stack
     local captop = 0 -- point to first empty slot in captures
-    local STACK = ffi.new("STACK[?]", maxstack)
+    local STACK = ffi.new("STACK[?]", INITBACK)
     local CAPTURE = ffi.new("CAPTURE[?]", maxcapturedefault)
     local CAPTURESTACK = { { capture = CAPTURE, captop = captop, maxcapture = maxcapturedefault } }
     local capturestackptr = #CAPTURESTACK
     local maxcapture = maxcapturedefault
-    local stacklimit = maxstack
+    local stacklimit = INITBACK
     local L = {}
     local Memo1, Memo2 = {}, {}
     local memoind = 0
@@ -250,7 +254,8 @@ local function match(stream, last, o, s, op, valuetable, ...)
             end
         end
         for i = streamstartbuffer + 1, streambufoffset - streambufsize, streambufsize do
-            if i + streambufsize + MAXBEHIND < min then -- max behind for full capture and max behind for Look-behind predicate
+            -- max behind for full capture and max behind for Look-behind predicate
+            if i + streambufsize + MAXBEHIND < min then
                 streambufs[i] = nil
                 streambufferscount = streambufferscount - 1
             else
@@ -301,7 +306,8 @@ local function match(stream, last, o, s, op, valuetable, ...)
 
     local checkstreamlen
 
-    local function getstreamstring(st, en) -- TODO Optimalize access
+    local function getstreamstring(st, en)
+        -- TODO Optimalize access
         local str = {}
         local i = st >= 0 and st or 1
         local to = en >= 0 and en or math.huge
@@ -415,7 +421,8 @@ local function match(stream, last, o, s, op, valuetable, ...)
                 Memo1[STACK[stackptr].pA + STACK[stackptr].memos * maxpointer] = FAIL
                 Memo2[STACK[stackptr].pA + STACK[stackptr].memos * maxpointer] = FAIL
             end
-            if X == LRFAIL then -- lvar.2 rest
+            -- lvar.2 rest
+            if X == LRFAIL then
                 CAPTURESTACK[capturestackptr] = nil
                 capturestackptr = capturestackptr - 1
                 CAPTURE = CAPTURESTACK[capturestackptr].capture
@@ -428,7 +435,8 @@ local function match(stream, last, o, s, op, valuetable, ...)
         for i = #valuetable, STACK[stackptr].valuetabletop + 1, -1 do
             table.remove(valuetable)
         end
-        if X >= 0 then -- inc.2
+        -- inc.2
+        if X >= 0 then
             s = X
             capturestackptr = capturestackptr - 1
             CAPTURE = CAPTURESTACK[capturestackptr].capture
@@ -450,7 +458,7 @@ local function match(stream, last, o, s, op, valuetable, ...)
 
     local function doublestack()
         if stackptr >= maxstack then
-            error("too many pending calls/choices", 0)
+            error(("backtrack stack overflow (current limit is %d)"):format(maxstack), 0)
         end
         stacklimit = stacklimit * 2
         stacklimit = (stacklimit > maxstack) and maxstack or stacklimit
@@ -497,7 +505,8 @@ local function match(stream, last, o, s, op, valuetable, ...)
                 end
             else
                 local X = STACK[stackptr - 1].X
-                if X == LRFAIL or s > X then -- lvar.1 inc.1
+                -- lvar.1 inc.1
+                if X == LRFAIL or s > X then
                     if trace then tracematch('IB', 0, 0, STACK[stackptr - 1].s + 1, s, STACK[stackptr - 1].p - 1, L[STACK[stackptr - 1].pA + STACK[stackptr - 1].s * maxpointer].level + 1, ...) end
                     STACK[stackptr - 1].X = s
                     p = STACK[stackptr - 1].pA
@@ -513,7 +522,8 @@ local function match(stream, last, o, s, op, valuetable, ...)
                     CAPTURE = ffi.new("CAPTURE[?]", maxcapturedefault)
                     CAPTURESTACK[capturestackptr] = { capture = CAPTURE, captop = captop, maxcapture = maxcapturedefault }
                     maxcapture = maxcapturedefault
-                else -- inc.3
+                else
+                    -- inc.3
                     stackptr = stackptr - 1
                     p = STACK[stackptr].p
                     s = STACK[stackptr].X
@@ -607,7 +617,8 @@ local function match(stream, last, o, s, op, valuetable, ...)
             else
                 local pA = p + op.p[p].offset
                 local X = L[pA + s * maxpointer]
-                if not X then -- lvar.1 lvar.2
+                -- lvar.1 lvar.2
+                if not X then
                     if trace then traceenter('', 1) end
                     CAPTURESTACK[capturestackptr].captop = captop
                     local capture = ffi.new("CAPTURE[?]", maxcapturedefault)
@@ -623,9 +634,11 @@ local function match(stream, last, o, s, op, valuetable, ...)
                     STACK[stackptr].X = LRFAIL
                     stackptr = stackptr + 1
                     p = pA
-                elseif X.X == LRFAIL or k < X.k then -- lvar.3 lvar.5
+                elseif X.X == LRFAIL or k < X.k then
+                    -- lvar.3 lvar.5
                     fail()
-                else -- lvar.4
+                else
+                    -- lvar.4
                     local capture = X.capturecommit
                     while captop + capture.captop >= maxcapture do
                         doublecapture()
@@ -658,7 +671,8 @@ local function match(stream, last, o, s, op, valuetable, ...)
         elseif code == IFail then
             fail()
         elseif code == ICloseRunTime then
-            for i = 0, stackptr - 1 do -- invalidate memo
+            -- invalidate memo
+            for i = 0, stackptr - 1 do
                 STACK[i].memos = VOID
             end
             local cs = {}
@@ -671,12 +685,14 @@ local function match(stream, last, o, s, op, valuetable, ...)
             local n = lpcap.runtimecap(cs, captop, s + 1, out, valuetable) -- call function
             captop = captop - n
             local res = resdyncaptures(out.out[1], s + 1, len and len + 1, checkstreamlen) -- get result
-            if res == FAIL then -- fail?
+            -- fail?
+            if res == FAIL then
                 fail()
             else
                 s = res - 1 -- else update current position
                 n = out.outindex - 1 -- number of new captures
-                if n > 0 then -- any new capture?
+                -- any new capture?
+                if n > 0 then
                     captop = captop + 1
                     while captop + n + 1 >= maxcapture do
                         doublecapture()
@@ -708,7 +724,8 @@ local function match(stream, last, o, s, op, valuetable, ...)
             CAPTURE[captop].siz = band(rshift(op.p[p].val, 4), 0x0F) + 1 -- save capture size
             CAPTURE[captop].s = s + 1 - band(rshift(op.p[p].val, 4), 0x0F)
             pushcapture()
-        elseif o then -- standard mode
+            -- standard mode
+        elseif o then
             if code == IAny then
                 if s < len then
                     p = p + 1
@@ -763,7 +780,8 @@ local function match(stream, last, o, s, op, valuetable, ...)
                 end
                 p = p + 1
             end
-        else -- stream mode
+        else
+            -- stream mode
             if code == IAny then
                 if checkstreamlen(s) then
                     p = p + 1
@@ -824,8 +842,8 @@ end
 
 local function setmax(val)
     maxstack = val
-    if maxstack < 100 then
-        maxstack = 100
+    if maxstack < INITBACK then
+        maxstack = INITBACK
     end
 end
 
@@ -846,14 +864,18 @@ end
 
 local function initposition(len, pos)
     local ii = pos or 1
-    if (ii > 0) then -- positive index?
-        if ii <= len then -- inside the string?
+    -- positive index?
+    if (ii > 0) then
+        -- inside the string?
+        if ii <= len then
             return ii - 1; -- return it (corrected to 0-base)
         else
             return len; -- crop at the end
         end
-    else -- negative index
-        if -ii <= len then -- inside the string?
+    else
+        -- negative index
+        -- inside the string?
+        if -ii <= len then
             return len + ii -- return position from the end
         else
             return 0; -- crop at the beginning
@@ -880,7 +902,8 @@ local function retcount(...)
 end
 
 -- Only for testing purpose
-local function lp_emulatestreammatch(pat, s, init, valuetable, ...) -- stream emulation (send all chars from string one char after char)
+-- stream emulation (send all chars from string one char after char)
+local function lp_emulatestreammatch(pat, s, init, valuetable, ...)
     local init = initposition(s:len(), init) + 1
     local fce = lp_streammatch(pat, init, valuetable, ...)
     local ret, count = {}, 0
@@ -888,8 +911,10 @@ local function lp_emulatestreammatch(pat, s, init, valuetable, ...) -- stream em
         local pcount, pret = retcount(fce(s:sub(j, j), j == #s)) -- one char
         if pret[1] == -1 then
             return -- fail
-        elseif pret[1] == 0 then -- parsing finished
-            for i = 2, pcount do -- collect result
+        elseif pret[1] == 0 then
+            -- parsing finished
+            -- collect result
+            for i = 2, pcount do
                 ret[count + i - 1] = pret[i]
             end
             count = count + pcount - 1
@@ -951,24 +976,28 @@ local function lp_load(str, fcetab, usemeta)
     for i = 1, count do
         local tag = ffi.string(ptr + index, 3)
         index = index + 3
-        if tag == 'str' then --string
+        --string
+        if tag == 'str' then
             local len = ffi.cast('uint32_t*', ptr + index)[0]
             index = index + 4
             local val = ffi.string(ptr + index, len)
             index = index + len
             valuetable[#valuetable + 1] = val
-        elseif tag == 'num' then --number
+        elseif tag == 'num' then
+            --number
             local len = ffi.cast('uint32_t*', ptr + index)[0]
             index = index + 4
             local val = ffi.string(ptr + index, len)
             index = index + len
             valuetable[#valuetable + 1] = tonumber(val)
-        elseif tag == 'cdt' then --ctype
+        elseif tag == 'cdt' then
+            --ctype
             local val = settype()
             ffi.copy(val, ptr + index, ffi.sizeof(settype))
             index = index + ffi.sizeof(settype)
             valuetable[#valuetable + 1] = val
-        elseif tag == 'fnc' then --function
+        elseif tag == 'fnc' then
+            --function
             local len = ffi.cast('uint32_t*', ptr + index)[0]
             index = index + 4
             local fname = ffi.string(ptr + index, len)

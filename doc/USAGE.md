@@ -1,4 +1,4 @@
-LPegLJ 0.12.2LJ
+LPegLJ 1.0.0.0LJ
 ===========
 ## New functions:
 ###Loading and saving patterns:

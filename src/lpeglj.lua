@@ -3,7 +3,7 @@ LPEGLJ
 lpeglj.lua
 Main module and tree generation
 Copyright (C) 2014 Rostislav Sacek.
-based on LPeg v0.12 - PEG pattern matching for Lua
+based on LPeg v1.0 - PEG pattern matching for Lua
 Lua.org & PUC-Rio  written by Roberto Ierusalimschy
 http://www.inf.puc-rio.br/~roberto/lpeg/
 
@@ -31,14 +31,14 @@ http://www.inf.puc-rio.br/~roberto/lpeg/
 
 assert(jit.version_num > 20000, "Use LuaJIT v2.0.1 or higher.")
 
-local ffi = require"ffi"
-local lpcode = require"lpcode"
-local lpprint = require"lpprint"
-local lpvm = require"lpvm"
+local ffi = require "ffi"
+local lpcode = require "lpcode"
+local lpprint = require "lpprint"
+local lpvm = require "lpvm"
 
 local band, bor, bnot, rshift, lshift = bit.band, bit.bor, bit.bnot, bit.rshift, bit.lshift
 
-ffi.cdef[[
+ffi.cdef [[
  int isalnum(int c);
  int isalpha(int c);
  int iscntrl(int c);
@@ -54,7 +54,7 @@ ffi.cdef[[
 
 local MAXBEHIND = 255
 local MAXRULES = 200
-local VERSION = "0.12.2LJ"
+local VERSION = "1.0.0.0LJ"
 
 local TChar = 0
 local TSet = 1
@@ -160,7 +160,8 @@ local uint32 = ffi.typeof('uint32_t[1]')
 local function fixonecall(postable, grammar, index, valuetable)
     local name = valuetable[grammar.p[index].val] -- get rule's name
     local n = postable[name] -- query name in position table
-    if not n then -- no position?
+    -- no position?
+    if not n then
         error(("rule '%s' undefined in given grammar"):format(type(name) == 'table' and '(a table)' or name), 0)
     end
     grammar.p[index].tag = TCall;
@@ -200,12 +201,15 @@ end
 local function finalfix(fix, postable, grammar, index, valuetable)
 
     local tag = grammar.p[index].tag
-    if tag == TGrammar then --subgrammars were already fixed
+    --subgrammars were already fixed
+    if tag == TGrammar then
         return
     elseif tag == TOpenCall then
-        if fix then -- inside a grammar?
+        -- inside a grammar?
+        if fix then
             fixonecall(postable, grammar, index, valuetable)
-        else -- open call outside grammar
+            -- open call outside grammar
+        else
             error(("rule '%s' used outside a grammar"):format(tostring(valuetable[grammar.p[index].val])), 0)
         end
     elseif tag == TSeq or tag == TChoice then
@@ -252,7 +256,8 @@ end
 -- must build a sequence of sequence of sequence...)
 
 local function fillseq(tree, tag, start, n, s)
-    for i = 1, n - 1 do -- initial n-1 copies of Seq tag; Seq ...
+    -- initial n-1 copies of Seq tag; Seq ...
+    for i = 1, n - 1 do
         tree.p[start].tag = TSeq
         tree.p[start].ps = 2
         tree.p[start + 1].tag = tag
@@ -282,7 +287,8 @@ local function numtree(n)
         if n > 0 then
             tree = treepattern(2 * n - 1)
             start = 0
-        else -- negative: code it as !(-n)
+            -- negative: code it as !(-n)
+        else
             n = -n;
             tree = treepattern(2 * n)
             tree.p[0].tag = TNot
@@ -299,7 +305,8 @@ end
 local function getpatt(val, name)
     local typ = type(val)
     if typ == 'string' then
-        if #val == 0 then -- empty?
+        -- empty?
+        if #val == 0 then
             local pat = treepattern(1)
             pat.p[0].tag = TTrue -- always match
             return pat
@@ -351,6 +358,7 @@ local function copykeys(ktable1, ktable2)
             ktable[#ktable + 1] = ktable2[i]
         end
     end
+    assert(#ktable < 65536, "too many Lua values in pattern")
     return ktable, offset
 end
 
@@ -418,9 +426,11 @@ end
 local function lp_seq(pat1, pat2)
     local tree1 = getpatt(pat1)
     local tree2 = getpatt(pat2)
-    if tree1.p[0].tag == TFalse or tree2.p[0].tag == TTrue then --  false . x == false, x . true = x
+    --  false . x == false, x . true = x
+    if tree1.p[0].tag == TFalse or tree2.p[0].tag == TTrue then
         return tree1
-    elseif tree1.p[0].tag == TTrue then -- true . x = x
+        -- true . x = x
+    elseif tree1.p[0].tag == TTrue then
         return tree2
     else
         return newroot2sib(TSeq, tree1, tree2)
@@ -460,26 +470,30 @@ local function lp_star(tree1, n)
     local tree
     n = tonumber(n)
     assert(type(n) == 'number')
-    if n >= 0 then -- seq tree1 (seq tree1 ... (seq tree1 (rep tree1)))
+    -- seq tree1 (seq tree1 ... (seq tree1 (rep tree1)))
+    if n >= 0 then
         tree = treepattern((n + 1) * (tree1.treesize + 1))
         if lpcode.checkaux(tree1, PEnullable, 0) then
             error("loop body may accept empty string", 0)
         end
         valuetable[tree.id] = copykeys(valuetable[tree1.id])
         local start = 0
-        for i = 1, n do -- repeat 'n' times
+        -- repeat 'n' times
+        for i = 1, n do
             seqaux(tree, tree1, start, tree1.treesize)
             start = start + tree.p[start].ps
         end
         tree.p[start].tag = TRep
         ffi.copy(tree.p + start + 1, tree1.p, ffi.sizeof(treepatternelement) * tree1.treesize)
-    else -- choice (seq tree1 ... choice tree1 true ...) true
+        -- choice (seq tree1 ... choice tree1 true ...) true
+    else
         n = -n;
         -- size = (choice + seq + tree1 + true) * n, but the last has no seq
         tree = treepattern(n * (tree1.treesize + 3) - 1)
         valuetable[tree.id] = copykeys(valuetable[tree1.id])
         local start = 0
-        for i = n, 2, -1 do -- repeat (n - 1) times
+        -- repeat (n - 1) times
+        for i = n, 2, -1 do
             tree.p[start].tag = TChoice;
             tree.p[start].ps = i * (tree1.treesize + 3) - 2
             tree.p[start + tree.p[start].ps].tag = TTrue;
@@ -572,7 +586,7 @@ local function lp_behind(pat)
     local tree1 = getpatt(pat)
     local n = lpcode.fixedlenx(tree1, 0, 0, 0)
     assert(not lpcode.hascaptures(tree1, 0), "pattern have captures")
-    assert(n > 0, "pattern may not have fixed length")
+    assert(n >= 0, "pattern may not have fixed length")
     assert(n <= MAXBEHIND, "pattern too long to look behind")
     local tree = newroot1sib(TBehind, pat)
     tree.p[0].val = n;
@@ -601,6 +615,7 @@ local function capture_aux(cap, pat, val)
     tree.p[0].cap = cap
     if val then
         local ind = #valuetable[tree.id] + 1
+        assert(ind <= 65536, "too many Lua values in pattern" .. ind)
         valuetable[tree.id][ind] = val
         tree.p[0].val = ind
     end
@@ -615,6 +630,7 @@ local function auxemptycap(tree, cap, par, start)
     tree.p[start].cap = cap
     if type(par) ~= 'nil' then
         local ind = #valuetable[tree.id] + 1
+        assert(ind <= 65536, "too many Lua values in pattern")
         valuetable[tree.id][ind] = par
         tree.p[start].val = ind
     end
@@ -648,6 +664,7 @@ local function lp_divcapture(pat, par, xxx)
         assert(0 <= par and par <= 0xffff, "invalid number")
         tree.p[0].cap = Cnum;
         local ind = #valuetable[tree.id] + 1
+        assert(ind <= 65536, "too many Lua values in pattern")
         valuetable[tree.id][ind] = par
         tree.p[0].val = ind
         return tree
@@ -696,6 +713,7 @@ local function lp_argcapture(val)
     assert(type(val) == 'number')
     local tree = newemptycap(Carg, 0)
     local ind = #valuetable[tree.id] + 1
+    assert(ind <= 65536, "too many Lua values in pattern")
     valuetable[tree.id][ind] = val
     tree.p[0].val = ind
     assert(0 < val and val <= 0xffff, "invalid argument index")
@@ -704,7 +722,6 @@ end
 
 
 local function lp_backref(val)
-    assert(type(val) == 'string')
     return newemptycap(Cbackref, val)
 end
 
@@ -715,12 +732,14 @@ local function lp_constcapture(...)
     local tree
     local args = { ... }
     local n = select('#', ...) -- number of values
-    if n == 0 then -- no values?
+    -- no values?
+    if n == 0 then
         tree = treepattern(1) -- no capture
         tree.p[0].tag = TTrue
     elseif n == 1 then
         tree = newemptycap(Cconst, args[1]) -- single constant capture
-    else -- create a group capture with all values
+        -- create a group capture with all values
+    else
         tree = treepattern(3 + 3 * (n - 1))
         valuetable[tree.id] = { 0 }
         tree.p[0].tag = TCapture
@@ -746,6 +765,7 @@ local function lp_matchtime(pat, fce, name)
     end
     local tree = newroot1sib(TRunTime, pat)
     local ind = #valuetable[tree.id] + 1
+    assert(ind <= 65536, "too many Lua values in pattern")
     valuetable[tree.id][ind] = fce
     tree.p[0].val = ind
     return tree
@@ -766,7 +786,8 @@ end
 
 local function getfirstrule(pat, postab)
     local key
-    if type(pat[1]) == 'string' then -- access first element
+    -- access first element
+    if type(pat[1]) == 'string' then
         key = pat[1]
     else
         key = 1
@@ -775,7 +796,8 @@ local function getfirstrule(pat, postab)
     if not rule then
         error("grammar has no initial rule", 0)
     end
-    if not ffi.istype(treepattern, rule) then -- initial rule not a pattern?
+    -- initial rule not a pattern?
+    if not ffi.istype(treepattern, rule) then
         error(("initial rule '%s' is not a pattern"):format(tostring(key)), 0)
     end
     postab[key] = 1
@@ -797,8 +819,10 @@ local function collectrules(pat)
     local rules = { firstkeyrule, firstrule }
     local size = 2 + firstrule.treesize -- TGrammar + TRule + rule
     for key, val in pairs(pat) do
-        if key ~= 1 and tostring(val) ~= tostring(firstrule) then -- initial rule?
-            if not ffi.istype(treepattern, val) then -- value is not a pattern?
+        -- initial rule?
+        if key ~= 1 and tostring(val) ~= tostring(firstrule) then
+            -- value is not a pattern?
+            if not ffi.istype(treepattern, val) then
                 error(("rule '%s' is not a pattern"):format(tostring(key)), 0)
             end
             rules[#rules + 1] = key
@@ -815,7 +839,8 @@ end
 
 local function buildgrammar(grammar, rules, n, index, valuetable)
     local ktable, offset = {}, 0
-    for i = 1, n do -- add each rule into new tree
+    -- add each rule into new tree
+    for i = 1, n do
         local size = rules[i * 2].treesize
         grammar.p[index].tag = TRule;
         grammar.p[index].cap = i; -- rule number
@@ -881,7 +906,8 @@ local function verifyrule(rulename, tree, passed, nullable, index, valuetable)
             return nullable
         end
         return verifyrule(rulename, tree, passed, nullable, index + tree.p[index].ps, valuetable)
-    elseif tag == TSeq then -- only check 2nd child if first is nullable
+        -- only check 2nd child if first is nullable
+    elseif tag == TSeq then
         local res = verifyrule(rulename, tree, passed, false, index + 1, valuetable)
         if res == PEleftrecursion then
             return res
@@ -890,7 +916,8 @@ local function verifyrule(rulename, tree, passed, nullable, index, valuetable)
         else
             return verifyrule(rulename, tree, passed, nullable, index + tree.p[index].ps, valuetable)
         end
-    elseif tag == TChoice then -- must check both children
+        -- must check both children
+    elseif tag == TChoice then
         nullable = verifyrule(rulename, tree, passed, nullable, index + 1, valuetable)
         if nullable == PEleftrecursion then return nullable end
         return verifyrule(rulename, tree, passed, nullable, index + tree.p[index].ps, valuetable)
@@ -912,7 +939,8 @@ local function verifygrammar(rule, index, valuetable)
     local ind = index + 1
     while rule.p[ind].tag == TRule do
         local rulename = valuetable[rule.p[ind].val]
-        if rulename then -- used rule
+        -- used rule
+        if rulename then
             if verifyrule(rulename, rule, {}, false, ind + 1, valuetable) == PEleftrecursion then
                 if not LREnable then
                     error(("rule '%s' may be left recursive"):format(rulename), 0)
@@ -938,7 +966,8 @@ local function verifygrammar(rule, index, valuetable)
     -- check infinite loops inside rules
     ind = index + 1
     while rule.p[ind].tag == TRule do
-        if rule.p[ind].val then -- used rule
+        -- used rule
+        if rule.p[ind].val then
             if checkloops(rule, ind + 1) then
                 error(("empty loop in rule '%s'"):format(tostring(valuetable[rule.p[ind].val])), 0)
             end
@@ -953,8 +982,10 @@ end
 
 local function initialrulename(grammar, val, valuetable)
     grammar.p[1].cap = bit.bor(grammar.p[1].cap, Ruleused)
-    if grammar.p[1].val == 0 then -- initial rule is not referenced?
+    -- initial rule is not referenced?
+    if grammar.p[1].val == 0 then
         local ind = #valuetable + 1
+        assert(ind <= 65536, "too many Lua values in pattern")
         valuetable[ind] = val
         grammar.p[1].val = ind
     end
@@ -1069,7 +1100,7 @@ local function checkalt(tree)
         if sibs >= 1 then
             iter(tree, index + 1, choice, rule)
             if sibs >= 2 then
-                iter(tree, index + tree[index].ps, choice, rule)
+                return iter(tree, index + tree[index].ps, choice, rule)
             end
         end
     end
@@ -1102,7 +1133,8 @@ end
 
 
 local function lp_printcode(pat)
-    if pat.code == nil then -- not compiled yet?
+    -- not compiled yet?
+    if pat.code == nil then
         prepcompile(pat, 0)
     end
     lpprint.printpatt(pat.code, valuetable[pat.id])
@@ -1124,7 +1156,8 @@ local function lp_streammatch(pat, init, ...)
 end
 
 -- Only for testing purpose
-local function lp_emulatestreammatch(pat, s, init, ...) -- stream emulation (send all chars from string one char after char)
+-- stream emulation (send all chars from string one char after char)
+local function lp_emulatestreammatch(pat, s, init, ...)
     local p = ffi.istype(treepattern, pat) and pat or getpatt(pat)
     p.code = p.code ~= nil and p.code or prepcompile(p, 0)
     return lpvm.emulatestreammatch(p, s, init, valuetable[p.id], ...)
@@ -1221,7 +1254,8 @@ end
 
 local function lp_dump(ct, tree)
     local funccount = 0
-    if ct.code == nil then -- not compiled yet?
+    -- not compiled yet?
+    if ct.code == nil then
         prepcompile(ct, 0)
     end
     local out = {}

@@ -3,7 +3,7 @@ LPEGLJ
 lpprint.lua
 Tree, code and debug print function (only for debuging)
 Copyright (C) 2014 Rostislav Sacek.
-based on LPeg v0.12 - PEG pattern matching for Lua
+based on LPeg v1.0 - PEG pattern matching for Lua
 Lua.org & PUC-Rio  written by Roberto Ierusalimschy
 http://www.inf.puc-rio.br/~roberto/lpeg/
 

@@ -1,3 +1,7 @@
+1.0.0.0 : September 30, 2015
+- include changes and bug fixes from LPeg v1.0 
+- added VM runtime listing (tracing) for debugging purposes
+
 0.12.2 : July 10, 2014
 
 - added restricted memoization

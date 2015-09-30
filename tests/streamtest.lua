@@ -1,6 +1,6 @@
 #!/usr/bin/env lua5.1
 
--- $Id: test.lua,v 1.101 2013/04/12 16:30:33 roberto Exp $
+-- $Id: test.lua,v 1.109 2015/09/28 17:01:25 roberto Exp $
 
 -- require"strict"    -- just to be pedantic
 
@@ -16,14 +16,11 @@ local unpack = rawget(table, "unpack") or unpack
 local loadstring = rawget(_G, "loadstring") or load
 
 
--- most tests here do not need much stack space
-m.setmaxstack(5)
-
 local any = m.P(1)
 local space = m.S" \t\n"^0
 
 local function checkeq (x, y, p)
-if p then print(x,y) end
+  if p then print(x,y) end
   if type(x) ~= "table" then assert(x == y)
   else
     for k,v in pairs(x) do checkeq(v, y[k], p) end
@@ -33,7 +30,7 @@ end
 
 
 local mt = getmetatable(m.P(1))
-mt = m.version() == "0.12.2LJ" and m or mt
+mt = m.version() == "1.0.0.0LJ" and m or mt
 
 
 local allchar = {}
@@ -171,8 +168,8 @@ assert(m.emulatestreammatch( basiclookfor((#m.P(b) * 1) * m.Cp()), "  (  (a)") =
 a = {m.emulatestreammatch(m.C(digit^1 * m.Cc"d") + m.C(letter^1 * m.Cc"l"), "123")}
 checkeq(a, {"123", "d"})
 
-a = {m.emulatestreammatch(m.C(digit^1) * "d" * -1 + m.C(letter^1 * m.Cc"l"), "123d")}
-checkeq(a, {"123"})
+-- bug in LPeg 0.12  (nil value does not create a 'ktable')
+assert(m.emulatestreammatch(m.Cc(nil), "") == nil)
 
 a = {m.emulatestreammatch(m.C(digit^1 * m.Cc"d") + m.C(letter^1 * m.Cc"l"), "abcd")}
 checkeq(a, {"abcd", "l"})
@@ -195,6 +192,16 @@ checkeq(a, {1, 5})
 t = {m.emulatestreammatch({[1] = m.C(m.C(1) * m.V(1) + -1)}, "abc")}
 checkeq(t, {"abc", "a", "bc", "b", "c", "c", ""})
 
+-- bug in 0.12 ('hascapture' did not check for captures inside a rule)
+do
+  local pat = m.P{
+    'S';
+    S1 = m.C('abc') + 3,
+    S = #m.V('S1')    -- rule has capture, but '#' must ignore it
+  }
+  assert(pat:emulatestreammatch'abc' == 1)
+end
+
 
 -- test for small capture boundary
 for i = 250,260 do
@@ -202,9 +209,8 @@ for i = 250,260 do
   assert(#m.emulatestreammatch(m.C(m.C(i)), string.rep('a', i)) == i)
 end
 
-
 -- tests for any*n and any*-n
-for n = 1, 550 do
+for n = 1, 550, 13 do
   local x_1 = string.rep('x', n - 1)
   local x = x_1 .. 'a'
   assert(not m.P(n):emulatestreammatch(x_1))
@@ -271,7 +277,7 @@ assert(m.emulatestreammatch("alo" * (m.P"\n" + -1), "alo") == 4)
 assert(m.emulatestreammatch((m.P"\128\187\191" + m.S"abc")^0, "\128\187\191") == 4)
 
 assert(m.emulatestreammatch(m.S"\0\128\255\127"^0, string.rep("\0\128\255\127", 10)) ==
-    4*10 + 1)
+        4*10 + 1)
 
 -- optimizations with optional parts
 assert(m.emulatestreammatch(("ab" * -m.P"c")^-1, "abc") == 1)
@@ -285,9 +291,16 @@ p = ('Aa' * ('Bb' * ('Cc' * m.P'Dd'^0)^0)^0)^-1
 assert(p:emulatestreammatch("AaBbCcDdBbCcDdDdDdBb") == 21)
 
 
+-- bug in 0.12.2
+-- p = { ('ab' ('c' 'ef'?)*)? }
+p = m.C(('ab' * ('c' * m.P'ef'^-1)^0)^-1)
+s = "abcefccefc"
+assert(s == p:emulatestreammatch(s))
+
+
 pi = "3.14159 26535 89793 23846 26433 83279 50288 41971 69399 37510"
 assert(m.emulatestreammatch(m.Cs((m.P"1" / "a" + m.P"5" / "b" + m.P"9" / "c" + 1)^0), pi) ==
-  m.emulatestreammatch(m.Cs((m.P(1) / {["1"] = "a", ["5"] = "b", ["9"] = "c"})^0), pi))
+        m.emulatestreammatch(m.Cs((m.P(1) / {["1"] = "a", ["5"] = "b", ["9"] = "c"})^0), pi))
 print"+"
 
 
@@ -344,10 +357,16 @@ checkeq(t, {hi = 10, ho = 20})
 t = p:emulatestreammatch'abc'
 checkeq(t, {hi = 10, ho = 20, 'a', 'b', 'c'})
 
+-- non-string group names
+p = m.Ct(m.Cg(1, print) * m.Cg(1, 23.5) * m.Cg(1, io))
+t = p:emulatestreammatch('abcdefghij')
+assert(t[print] == 'a' and t[23.5] == 'b' and t[io] == 'c')
+
 
 -- test for error messages
-local function checkerr (msg, ...)
-  assert(m.emulatestreammatch({ m.P(msg) + 1 * m.V(1) }, select(2, pcall(...))))
+local function checkerr (msg, f, ...)
+  local st, err = pcall(f, ...)
+  assert(not st and m.emulatestreammatch({ m.P(msg) + 1 * m.V(1) }, err))
 end
 
 checkerr("rule '1' may be left recursive", m.emulatestreammatch, { m.V(1) * 'a' }, "a")
@@ -371,7 +390,31 @@ p = {'a',
 }
 checkerr("rule 'a' may be left recursive", m.emulatestreammatch, p, "a")
 
+-- Bug in peephole optimization of LPeg 0.12 (IJmp -> ICommit)
+-- the next grammar has an original sequence IJmp -> ICommit -> IJmp L1
+-- that is optimized to ICommit L1
 
+p = m.P { (m.P {m.P'abc'} + 'ayz') * m.V'y'; y = m.P'x' }
+assert(p:emulatestreammatch('abcx') == 5 and p:emulatestreammatch('ayzx') == 5 and not p:emulatestreammatch'abc')
+
+
+do
+  -- large dynamic Cc
+  local lim = 2^16 - 1
+  local c = 0
+  local function seq (n)
+    if n == 1 then c = c + 1; return m.Cc(c)
+    else
+      local m = math.floor(n / 2)
+      return seq(m) * seq(n - m)
+    end
+  end
+  p = m.Ct(seq(lim))
+  t = p:emulatestreammatch('')
+  assert(t[lim] == lim)
+  checkerr("too many", function () p = p / print end)
+  checkerr("too many", seq, lim + 1)
+end
 -- tests for non-pattern as arguments to pattern functions
 
 p = { ('a' * m.V(1))^-1 } * m.P'b' * { 'a' * m.V(2); m.V(1)^-1 }
@@ -388,7 +431,7 @@ assert(p:emulatestreammatch("abc01de") == 8)
 assert(p:emulatestreammatch("abc01de3456") == nil)
 
 p = { m.V(2), m.P"abc" } *
-     (m.P{ "xx", xx = m.P"xx" } + { "x", x = m.P"a" * m.V"x" + "" })
+        (m.P{ "xx", xx = m.P"xx" } + { "x", x = m.P"a" * m.V"x" + "" })
 assert(p:emulatestreammatch("abcaaaxx") == 7)
 assert(p:emulatestreammatch("abcxx") == 6)
 
@@ -489,7 +532,10 @@ assert(m.emulatestreammatch(1 * m.B(1), 'a') == 2)
 assert(m.emulatestreammatch(-m.B(1), 'a') == 1)
 assert(m.emulatestreammatch(m.B(250), string.rep('a', 250)) == nil)
 assert(m.emulatestreammatch(250 * m.B(250), string.rep('a', 250)) == 251)
-assert(not pcall(m.B, 260))
+
+-- look-behind with an open call
+checkerr("pattern may not have fixed length", m.B, m.V'S1')
+checkerr("too long to look behind", m.B, 260)
 
 B = #letter * -m.B(letter) + -letter * m.B(letter)
 x = m.Ct({ (B * m.Cp())^-1 * (1 * m.V(1) + m.P(true)) })
@@ -556,18 +602,18 @@ assert(not p:emulatestreammatch(string.rep("011", 10001)))
 -- this grammar does need backtracking info.
 local lim = 10000
 p = m.P{ '0' * m.V(1) + '0' }
-assert(not pcall(m.emulatestreammatch, p, string.rep("0", lim)))
+checkerr("stack overflow", m.emulatestreammatch, p, string.rep("0", lim))
 m.setmaxstack(2*lim)
-assert(not pcall(m.emulatestreammatch, p, string.rep("0", lim)))
+checkerr("stack overflow", m.emulatestreammatch, p, string.rep("0", lim))
 m.setmaxstack(2*lim + 4)
-assert(pcall(m.emulatestreammatch, p, string.rep("0", lim)))
+assert(m.emulatestreammatch(p, string.rep("0", lim)) == lim + 1)
 
 -- this repetition should not need stack space (only the call does)
 p = m.P{ ('a' * m.V(1))^0 * 'b' + 'c' }
 m.setmaxstack(200)
 assert(p:emulatestreammatch(string.rep('a', 180) .. 'c' .. string.rep('b', 180)) == 362)
 
-m.setmaxstack(5)   -- restore original limit
+m.setmaxstack(100)   -- restore low limit
 
 -- tests for optional start position
 assert(m.emulatestreammatch("a", "abc", 1))
@@ -589,27 +635,28 @@ print("+")
 
 
 -- tests for argument captures
-assert(not pcall(m.Carg, 0))
-assert(not pcall(m.Carg, -1))
-assert(not pcall(m.Carg, 2^18))
-assert(not pcall(m.emulatestreammatch, m.Carg(1), 'a', 1))
+checkerr("invalid argument", m.Carg, 0)
+checkerr("invalid argument", m.Carg, -1)
+checkerr("invalid argument", m.Carg, 2^18)
+checkerr("absent extra argument #1", m.emulatestreammatch, m.Carg(1), 'a', 1)
 assert(m.emulatestreammatch(m.Carg(1), 'a', 1, print) == print)
 x = {m.emulatestreammatch(m.Carg(1) * m.Carg(2), '', 1, 10, 20)}
 checkeq(x, {10, 20})
 
 assert(m.emulatestreammatch(m.Cmt(m.Cg(m.Carg(3), "a") *
-                     m.Cmt(m.Cb("a"), function (s,i,x)
-                                        assert(s(1,-1) == "a" and i == 1);
-                                        return i, x+1
-                                      end) *
-                     m.Carg(2), function (s,i,a,b,c)
-                                  assert(s(1,-1) == "a" and i == 1 and c == nil);
-				  return i, 2*a + 3*b
-                                end) * "a",
-               "a", 1, false, 100, 1000) == 2*1001 + 3*100)
+        m.Cmt(m.Cb("a"), function (s,i,x)
+          assert(s(1,-1) == "a" and i == 1);
+          return i, x+1
+        end) *
+        m.Carg(2), function (s,i,a,b,c)
+  assert(s(1,-1) == "a" and i == 1 and c == nil);
+  return i, 2*a + 3*b
+end) * "a",
+  "a", 1, false, 100, 1000) == 2*1001 + 3*100)
 
 
 -- tests for Lua functions
+
 t = {}
 s = ""
 p = m.P(function (s1, i) assert(s == s1(1,-1)); t[#t + 1] = i; return nil end) * false
@@ -618,11 +665,13 @@ assert(m.emulatestreammatch(((p - m.P(-1)) + 2)^0, s) == string.len(s) + 1)
 assert(#t == string.len(s)/2 and t[1] == 1 and t[2] == 3)
 
 assert(not m.emulatestreammatch(p, s))
+
 p = mt.__add(function (s, i) return i end, function (s, i) return nil end)
 assert(m.emulatestreammatch(p, "alo"))
 
 p = mt.__mul(function (s, i) return i end, function (s, i) return nil end)
 assert(not m.emulatestreammatch(p, "alo"))
+
 
 t = {}
 p = function (s1, i) assert(s == s1(1,-1)); t[#t + 1] = i; return i end
@@ -632,7 +681,7 @@ assert(#t == string.len(s) and t[1] == 2 and t[2] == 3)
 
 t = {}
 p = m.P(function (s1, i) assert(s == s1(1,-1)); t[#t + 1] = i;
-                         return i <= s1(1,-1):len() and i end) * 1
+return i <= s1(1,-1):len() and i end) * 1
 s = "hi, this is a test"
 assert(m.emulatestreammatch(p^0, s) == string.len(s) + 1)
 assert(#t == string.len(s) + 1 and t[1] == 1 and t[2] == 2)
@@ -641,25 +690,29 @@ p = function (s1, i) return m.emulatestreammatch(m.P"a"^1, s1(1,-1), i) end
 assert(m.emulatestreammatch(p, "aaaa") == 5)
 assert(m.emulatestreammatch(p, "abaa") == 2)
 assert(not m.emulatestreammatch(p, "baaa"))
-assert(not pcall(m.emulatestreammatch, function () return 2^20 end, s))
-assert(not pcall(m.emulatestreammatch, function () return 0 end, s))
-assert(not pcall(m.emulatestreammatch, function (s, i) return i - 1 end, s))
-assert(not pcall(m.emulatestreammatch, m.P(1)^0 * function (_, i) return i - 1 end, s))
+
+checkerr("invalid position", m.emulatestreammatch, function () return 2^20 end, s)
+checkerr("invalid position", m.emulatestreammatch, function () return 0 end, s)
+checkerr("invalid position", m.emulatestreammatch, function (s, i) return i - 1 end, s)
+checkerr("invalid position", m.emulatestreammatch,
+  m.P(1)^0 * function (_, i) return i - 1 end, s)
 assert(m.emulatestreammatch(m.P(1)^0 * function (_, i) return i end * -1, s))
-assert(not pcall(m.emulatestreammatch, m.P(1)^0 * function (_, i) return i + 1 end, s))
+checkerr("invalid position", m.emulatestreammatch,
+  m.P(1)^0 * function (_, i) return i + 1 end, s)
 assert(m.emulatestreammatch(m.P(function (s, i) return s(1,-1):len() + 1 end) * -1, s))
-assert(not pcall(m.emulatestreammatch, m.P(function (s, i) return s:len() + 2 end) * -1, s))
+checkerr("invalid position", m.emulatestreammatch, m.P(function (s, i) return s(1,-1):len() + 2 end) * -1, s)
 assert(not m.emulatestreammatch(m.P(function (s, i) return s(1,-1):len() end) * -1, s))
 assert(m.emulatestreammatch(m.P(1)^0 * function (_, i) return true end, s) ==
-       string.len(s) + 1)
+        string.len(s) + 1)
 for i = 1, string.len(s) + 1 do
   assert(m.emulatestreammatch(function (_, _) return i end, s) == i)
 end
 
 p = (m.P(function (s, i) return i%2 == 0 and i end) * 1
-  +  m.P(function (s, i) return i%2 ~= 0 and i + 2 <= s(1,-1):len() and i end) * 3)^0
-  * -1
-assert(p:emulatestreammatch(string.rep('a', 1400)))
+        +  m.P(function (s, i) return i%2 ~= 0 and i + 2 <= s(1,-1):len() and i end) * 3)^0
+        * -1
+assert(p:emulatestreammatch(string.rep('a', 14000)))
+
 -- tests for Function Replacements
 f = function (a, ...) if a ~= "x" then return {a, ...} end end
 
@@ -691,6 +744,10 @@ checkeq(t, {1, 1, "a", "b", "c"})
 t = {m.emulatestreammatch(m.Cc(nil,nil,4) * m.Cc(nil,3) * m.Cc(nil, nil) / g / g, "")}
 t1 = {1,1,nil,nil,4,nil,3,nil,nil}
 for i=1,10 do assert(t[i] == t1[i]) end
+
+-- bug in 0.12.2: ktable with only nil could be eliminated when joining
+-- with a pattern without ktable
+assert((m.P"aaa" * m.Cc(nil)):emulatestreammatch"aaa" == nil)
 
 t = {m.emulatestreammatch((m.C(1) / function (x) return x, x.."x" end)^0, "abc")}
 checkeq(t, {"a", "ax", "b", "bx", "c", "cx"})
@@ -728,11 +785,11 @@ assert(m.emulatestreammatch(m.Cs((m.P("a") / "%0.%0" + 1)^0), "abcad") == "a.abc
 assert(m.emulatestreammatch(m.C("a") / "%1%%%0", "a") == "a%a")
 assert(m.emulatestreammatch(m.Cs((m.P(1) / ".xx")^0), "abcd") == ".xx.xx.xx.xx")
 assert(m.emulatestreammatch(m.Cp() * m.P(3) * m.Cp()/"%2%1%1 - %0 ", "abcde") ==
-   "411 - abc ")
+        "411 - abc ")
 
-assert(pcall(m.emulatestreammatch, m.P(1)/"%0", "abc"))
-assert(not pcall(m.emulatestreammatch, m.P(1)/"%1", "abc"))   -- out of range
-assert(not pcall(m.emulatestreammatch, m.P(1)/"%9", "abc"))   -- out of range
+assert(m.emulatestreammatch(m.P(1)/"%0", "abc") == "a")
+checkerr("invalid capture index", m.emulatestreammatch, m.P(1)/"%1", "abc")
+checkerr("invalid capture index", m.emulatestreammatch, m.P(1)/"%9", "abc")
 
 p = m.C(1)
 p = p * p; p = p * p; p = p * p * m.C(1) / "%9 - %1"
@@ -750,7 +807,7 @@ assert(m.emulatestreammatch(m.C(1)^0 / "%9-%1-%0-%3", s) == "9-1-" .. s .. "-3")
 p = m.Cc('alo') * m.C(1) / "%1 - %2 - %1"
 assert(p:emulatestreammatch'x' == 'alo - x - alo')
 
-assert(not pcall(m.emulatestreammatch, m.Cc(true) / "%1", "a"))
+checkerr("invalid capture value (a boolean)", m.emulatestreammatch, m.Cc(true) / "%1", "a")
 
 -- long strings for string capture
 l = 10000
@@ -759,8 +816,8 @@ s = string.rep('a', l) .. string.rep('b', l) .. string.rep('c', l)
 p = (m.C(m.P'a'^1) * m.C(m.P'b'^1) * m.C(m.P'c'^1)) / '%3%2%1'
 
 assert(p:emulatestreammatch(s) == string.rep('c', l) ..
-                     string.rep('b', l) ..
-                     string.rep('a', l))
+        string.rep('b', l) ..
+        string.rep('a', l))
 
 print"+"
 
@@ -771,44 +828,46 @@ assert(m.emulatestreammatch(m.Cf(m.Cc(0) * m.C(1)^0, f), "alo alo") == 7)
 t = {m.emulatestreammatch(m.Cf(m.Cc(1,2,3), error), "")}
 checkeq(t, {1})
 p = m.Cf(m.Ct(true) * m.Cg(m.C(m.R"az"^1) * "=" * m.C(m.R"az"^1) * ";")^0,
-         rawset)
+  rawset)
 t = p:emulatestreammatch("a=b;c=du;xux=yuy;")
 checkeq(t, {a="b", c="du", xux="yuy"})
 
 
 -- errors in accumulator capture
 
--- very long match (forces fold to be a pair open-close) producing with
 -- no initial capture
-assert(not pcall(m.emulatestreammatch, m.Cf(m.P(500), print), string.rep('a', 600)))
+checkerr("no initial value", m.emulatestreammatch, m.Cf(m.P(5), print), 'aaaaaa')
+-- no initial capture (very long match forces fold to be a pair open-close)
+checkerr("no initial value", m.emulatestreammatch, m.Cf(m.P(500), print),
+  string.rep('a', 600))
 
 -- nested capture produces no initial value
-assert(not pcall(m.emulatestreammatch, m.Cf(m.P(1) / {}, print), "alo"))
+checkerr("no initial value", m.emulatestreammatch, m.Cf(m.P(1) / {}, print), "alo")
 
 
 -- tests for loop checker
 
-local function haveloop (p)
-  assert(not pcall(function (p) return p^0 end, m.P(p)))
+local function isnullable (p)
+  checkerr("may accept empty string", function (p) return p^0 end, m.P(p))
 end
 
-haveloop(m.P("x")^-4)
+isnullable(m.P("x")^-4)
 assert(m.emulatestreammatch(((m.P(0) + 1) * m.S"al")^0, "alo") == 3)
 assert(m.emulatestreammatch((("x" + #m.P(1))^-4 * m.S"al")^0, "alo") == 3)
-haveloop("")
-haveloop(m.P("x")^0)
-haveloop(m.P("x")^-1)
-haveloop(m.P("x") + 1 + 2 + m.P("a")^-1)
-haveloop(-m.P("ab"))
-haveloop(- -m.P("ab"))
-haveloop(# #(m.P("ab") + "xy"))
-haveloop(- #m.P("ab")^0)
-haveloop(# -m.P("ab")^1)
-haveloop(#m.V(3))
-haveloop(m.V(3) + m.V(1) + m.P('a')^-1)
-haveloop({[1] = m.V(2) * m.V(3), [2] = m.V(3), [3] = m.P(0)})
+isnullable("")
+isnullable(m.P("x")^0)
+isnullable(m.P("x")^-1)
+isnullable(m.P("x") + 1 + 2 + m.P("a")^-1)
+isnullable(-m.P("ab"))
+isnullable(- -m.P("ab"))
+isnullable(# #(m.P("ab") + "xy"))
+isnullable(- #m.P("ab")^0)
+isnullable(# -m.P("ab")^1)
+isnullable(#m.V(3))
+isnullable(m.V(3) + m.V(1) + m.P('a')^-1)
+isnullable({[1] = m.V(2) * m.V(3), [2] = m.V(3), [3] = m.P(0)})
 assert(m.emulatestreammatch(m.P{[1] = m.V(2) * m.V(3), [2] = m.V(3), [3] = m.P(1)}^0, "abc")
-       == 3)
+        == 3)
 assert(m.emulatestreammatch(m.P""^-3, "a") == 1)
 
 local function find (p, s)
@@ -869,10 +928,10 @@ p = m.P(p)
 -- strange values for rule labels
 
 p = m.P{ "print",
-     print = m.V(print),
-     [print] = m.V(_G),
-     [_G] = m.P"a",
-   }
+  print = m.V(print),
+  [print] = m.V(_G),
+  [_G] = m.P"a",
+}
 
 assert(p:emulatestreammatch("a"))
 
@@ -890,47 +949,56 @@ print"+"
 
 
 -- tests for back references
-assert(not pcall(m.emulatestreammatch, m.Cb('x'), ''))
-assert(not pcall(m.emulatestreammatch, m.Cg(1, 'a') * m.Cb('b'), 'a'))
+checkerr("back reference 'x' not found", m.emulatestreammatch, m.Cb('x'), '')
+checkerr("back reference 'b' not found", m.emulatestreammatch, m.Cg(1, 'a') * m.Cb('b'), 'a')
 
 p = m.Cg(m.C(1) * m.C(1), "k") * m.Ct(m.Cb("k"))
 t = p:emulatestreammatch("ab")
 checkeq(t, {"a", "b"})
+
+p = m.P(true)
+for i = 1, 10 do p = p * m.Cg(1, i) end
+for i = 1, 10 do
+  local p = p * m.Cb(i)
+  assert(p:emulatestreammatch('abcdefghij') == string.sub('abcdefghij', i, i))
+end
 
 
 t = {}
 function foo (p) t[#t + 1] = p; return p .. "x" end
 
 p = m.Cg(m.C(2)    / foo, "x") * m.Cb"x" *
-    m.Cg(m.Cb('x') / foo, "x") * m.Cb"x" *
-    m.Cg(m.Cb('x') / foo, "x") * m.Cb"x" *
-    m.Cg(m.Cb('x') / foo, "x") * m.Cb"x"
+        m.Cg(m.Cb('x') / foo, "x") * m.Cb"x" *
+        m.Cg(m.Cb('x') / foo, "x") * m.Cb"x" *
+        m.Cg(m.Cb('x') / foo, "x") * m.Cb"x"
 x = {p:emulatestreammatch'ab'}
 checkeq(x, {'abx', 'abxx', 'abxxx', 'abxxxx'})
 checkeq(t, {'ab',
-            'ab', 'abx',
-            'ab', 'abx', 'abxx',
-            'ab', 'abx', 'abxx', 'abxxx'})
+  'ab', 'abx',
+  'ab', 'abx', 'abxx',
+  'ab', 'abx', 'abxx', 'abxxx'})
 
 
 
 -- tests for match-time captures
+
 p = m.P'a' * (function (s, i) return (s(1,-1):sub(i, i) == 'b') and i + 1 end)
-  + 'acd'
+        + 'acd'
 
 assert(p:emulatestreammatch('abc') == 3)
 assert(p:emulatestreammatch('acd') == 4)
+
 local function id (s, i, ...)
   return true, ...
 end
 
 assert(m.Cmt(m.Cs((m.Cmt(m.S'abc' / { a = 'x', c = 'y' }, id) +
-              m.R'09'^1 /  string.char +
-              m.P(1))^0), id):emulatestreammatch"acb98+68c" == "xyb\98+\68y")
+        m.R'09'^1 /  string.char +
+        m.P(1))^0), id):emulatestreammatch"acb98+68c" == "xyb\98+\68y")
 
 p = m.P{'S',
   S = m.V'atom' * space
-    + m.Cmt(m.Ct("(" * space * (m.Cmt(m.V'S'^1, id) + m.P(true)) * ")" * space), id),
+          + m.Cmt(m.Ct("(" * space * (m.Cmt(m.V'S'^1, id) + m.P(true)) * ")" * space), id),
   atom = m.Cmt(m.C(m.R("AZ", "az", "09")^1), id)
 }
 x = p:emulatestreammatch"(a g () ((b) c) (d (e)))"
@@ -971,33 +1039,33 @@ p = (any - p)^0 * p * any^0 * -1
 
 assert(p:emulatestreammatch'abbbc-bc ddaa' == 'BC')
 
-do   -- emulatestreammatch-time captures cannot be optimized away
-  local touch = 0
-  f = m.P(function () touch = touch + 1; return true end)
+do   -- match-time captures cannot be optimized away
+local touch = 0
+f = m.P(function () touch = touch + 1; return true end)
 
-  local function check(n) n = n or 1; assert(touch == n); touch = 0 end
+local function check(n) n = n or 1; assert(touch == n); touch = 0 end
 
-  assert(m.emulatestreammatch(f * false + 'b', 'a') == nil); check()
-  assert(m.emulatestreammatch(f * false + 'b', '') == nil); check()
-  assert(m.emulatestreammatch( (f * 'a')^0 * 'b', 'b') == 2); check()
-  assert(m.emulatestreammatch( (f * 'a')^0 * 'b', '') == nil); check()
-  assert(m.emulatestreammatch( (f * 'a')^-1 * 'b', 'b') == 2); check()
-  assert(m.emulatestreammatch( (f * 'a')^-1 * 'b', '') == nil); check()
-  assert(m.emulatestreammatch( ('b' + f * 'a')^-1 * 'b', '') == nil); check()
-  assert(m.emulatestreammatch( (m.P'b'^-1 * f * 'a')^-1 * 'b', '') == nil); check()
-  assert(m.emulatestreammatch( (-m.P(1) * m.P'b'^-1 * f * 'a')^-1 * 'b', '') == nil);
-     check()
-  assert(m.emulatestreammatch( (f * 'a' + 'b')^-1 * 'b', '') == nil); check()
-  assert(m.emulatestreammatch(f * 'a' + f * 'b', 'b') == 2); check(2)
-  assert(m.emulatestreammatch(f * 'a' + f * 'b', 'a') == 2); check(1)
-  assert(m.emulatestreammatch(-f * 'a' + 'b', 'b') == 2); check(1)
-  assert(m.emulatestreammatch(-f * 'a' + 'b', '') == nil); check(1)
+assert(m.emulatestreammatch(f * false + 'b', 'a') == nil); check()
+assert(m.emulatestreammatch(f * false + 'b', '') == nil); check()
+assert(m.emulatestreammatch( (f * 'a')^0 * 'b', 'b') == 2); check()
+assert(m.emulatestreammatch( (f * 'a')^0 * 'b', '') == nil); check()
+assert(m.emulatestreammatch( (f * 'a')^-1 * 'b', 'b') == 2); check()
+assert(m.emulatestreammatch( (f * 'a')^-1 * 'b', '') == nil); check()
+assert(m.emulatestreammatch( ('b' + f * 'a')^-1 * 'b', '') == nil); check()
+assert(m.emulatestreammatch( (m.P'b'^-1 * f * 'a')^-1 * 'b', '') == nil); check()
+assert(m.emulatestreammatch( (-m.P(1) * m.P'b'^-1 * f * 'a')^-1 * 'b', '') == nil);
+check()
+assert(m.emulatestreammatch( (f * 'a' + 'b')^-1 * 'b', '') == nil); check()
+assert(m.emulatestreammatch(f * 'a' + f * 'b', 'b') == 2); check(2)
+assert(m.emulatestreammatch(f * 'a' + f * 'b', 'a') == 2); check(1)
+assert(m.emulatestreammatch(-f * 'a' + 'b', 'b') == 2); check(1)
+assert(m.emulatestreammatch(-f * 'a' + 'b', '') == nil); check(1)
 end
 
 c = '[' * m.Cg(m.P'='^0, "init") * '[' *
-    { m.Cmt(']' * m.C(m.P'='^0) * ']' * m.Cb("init"), function (_, _, s1, s2)
-                                               return s1 == s2 end)
-       + 1 * m.V(1) } / 0
+        { m.Cmt(']' * m.C(m.P'='^0) * ']' * m.Cb("init"), function (_, _, s1, s2)
+          return s1 == s2 end)
+                + 1 * m.V(1) } / 0
 
 assert(c:emulatestreammatch'[==[]]====]]]]==]===[]' == 18)
 assert(c:emulatestreammatch'[[]=]====]=]]]==]===[]' == 14)
@@ -1008,6 +1076,7 @@ assert(not c:emulatestreammatch'[[]=]====]=]=]==]===[]')
 p = m.Cmt(0, function (s) p = s(1,-1) end) * m.P(false)
 assert(not p:emulatestreammatch('alo'))
 assert(p == 'alo')
+
 
 -- ensure that failed match-time captures are not kept on Lua stack
 do
@@ -1029,8 +1098,8 @@ do
 end
 
 p = (m.P(function () return true, "a" end) * 'a'
-  + m.P(function (s, i) return i, "aa", 20 end) * 'b'
-  + m.P(function (s,i) if i <= #s(1,-1) then return i, "aaa" end end) * 1)^0
+        + m.P(function (s, i) return i, "aa", 20 end) * 'b'
+        + m.P(function (s,i) if i <= #s(1,-1) then return i, "aaa" end end) * 1)^0
 
 t = {p:emulatestreammatch('abacc')}
 checkeq(t, {'a', 'aa', 20, 'a', 'aaa', 'aaa'})
@@ -1209,7 +1278,7 @@ assert(match("alo alo", "{:x: [a-z]+ :} ' ' =x") == "alo alo")
 assert(re.gsub("alo alo", "[abc]", "x") == "xlo xlo")
 assert(re.gsub("alo alo", "%w+", ".") == ". .")
 assert(re.gsub("hi, how are you", "[aeiou]", string.upper) ==
-               "hI, hOw ArE yOU")
+        "hI, hOw ArE yOU")
 
 s = 'hi [[a comment[=]=] ending here]] and [=[another]]=]]'
 c = re.compile" '[' {:i: '='* :} '[' (!(']' =i ']') .)* ']' { =i } ']' "
@@ -1232,7 +1301,7 @@ c = re.compile([[
 x = c:emulatestreammatch[[
 <x>hi<b>hello</b>but<b>totheend</x>]]
 checkeq(x, {tag='x', 'hi', {tag = 'b', 'hello'}, 'but',
-                     {'totheend'}})
+  {'totheend'}})
 
 
 -- tests for look-ahead captures
@@ -1240,8 +1309,8 @@ x = {re.emulatestreammatch("alo", "&(&{.}) !{'b'} {&(...)} &{..} {...} {!.}")}
 checkeq(x, {"", "alo", ""})
 
 assert(re.emulatestreammatch("aloalo",
-   "{~ (((&'al' {.}) -> 'A%1' / (&%l {.}) -> '%1%1') / .)* ~}")
-       == "AallooAalloo")
+  "{~ (((&'al' {.}) -> 'A%1' / (&%l {.}) -> '%1%1') / .)* ~}")
+        == "AallooAalloo")
 
 -- bug in 0.9 (and older versions), due to captures in look-aheads
 x = re.compile[[   {~ (&(. ([a-z]* -> '*')) ([a-z]+ -> '+') ' '*)* ~}  ]]
@@ -1251,7 +1320,7 @@ assert(x:emulatestreammatch"alo alo" == "+ +")
 x = re.compile[[
       S <- &({:two: .. :} . =two) {[a-z]+} / . S
 ]]
-assert(x:match("hello aloaLo aloalo xuxu") == "aloalo")
+assert(x:emulatestreammatch("hello aloaLo aloalo xuxu") == "aloalo")
 
 
 p = re.compile[[
@@ -1271,7 +1340,7 @@ ____
 __2.1
 ]]
 checkeq(t, {"1", {"1.1", "1.2", {"1.2.1", "", ident = "____"}, ident = "__"},
-            "2", {"2.1", ident = "__"}, ident = ""})
+  "2", {"2.1", ident = "__"}, ident = ""})
 
 
 -- nested grammars
@@ -1363,8 +1432,7 @@ assert(rev:emulatestreammatch"0123456789" == "9876543210")
 -- testing error messages in re
 
 local function errmsg (p, err)
-  local s, msg = pcall(re.compile, p)
-  assert(not s and string.find(msg, err))
+  checkerr(err, re.compile, p)
 end
 
 errmsg('aaaa', "rule 'aaaa'")
@@ -1375,3 +1443,5 @@ errmsg("'a' -", "near '-'")
 
 
 print"OK"
+
+

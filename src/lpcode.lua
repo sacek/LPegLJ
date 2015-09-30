@@ -3,7 +3,7 @@ LPEGLJ
 lpcode.lua
 Generating code from tree
 Copyright (C) 2014 Rostislav Sacek.
-based on LPeg v0.12 - PEG pattern matching for Lua
+based on LPeg v1.0 - PEG pattern matching for Lua
 Lua.org & PUC-Rio  written by Roberto Ierusalimschy
 http://www.inf.puc-rio.br/~roberto/lpeg/
 
@@ -28,8 +28,8 @@ http://www.inf.puc-rio.br/~roberto/lpeg/
 **
 ** [ MIT license: http://www.opensource.org/licenses/mit-license.php ]
 --]]
-local ffi = require"ffi"
-require"lpvm"
+local ffi = require "ffi"
+require "lpvm"
 
 local band, bor, bnot, rshift, lshift = bit.band, bit.bor, bit.bnot, bit.rshift, bit.lshift
 
@@ -148,10 +148,12 @@ local function charsettype(cs)
             else
                 count = count + 32; -- set is still full
             end
-        elseif band(b, (b - 1)) == 0 then -- byte has only one bit?
+            -- byte has only one bit?
+        elseif band(b, (b - 1)) == 0 then
             if count > 0 then
                 return ISet; -- set is neither full nor empty
-            else -- set has only one char till now; track it
+                -- set has only one char till now; track it
+            else
                 count = count + 1;
                 candidate = i;
             end
@@ -161,7 +163,8 @@ local function charsettype(cs)
     end
     if count == 0 then
         return IFail, 0 -- empty set
-    elseif count == 1 then -- singleton; find character bit inside byte
+        -- singleton; find character bit inside byte
+    elseif count == 1 then
         local b = cs[candidate];
         local c = candidate * 32;
         for i = 1, 32 do
@@ -236,6 +239,8 @@ end
 local function hascaptures(tree, index)
     if tree.p[index].tag == TCapture or tree.p[index].tag == TRunTime then
         return true
+    elseif tree.p[index].tag == TCall then
+        return hascaptures(tree, index + tree.p[index].ps)
     else
         local ns = numsiblings[tree.p[index].tag + 1]
         if ns == 0 then
@@ -293,7 +298,8 @@ local function checkaux(tree, pred, index, lrcall)
         else
             return checkaux(tree, pred, index + 1, lrcall)
         end
-    elseif tag == TRunTime then -- can fail; match empty iff body does
+        -- can fail; match empty iff body does
+    elseif tag == TRunTime then
         if pred == PEnofail then
             return
         else
@@ -314,7 +320,8 @@ local function checkaux(tree, pred, index, lrcall)
     elseif tag == TCapture or tag == TGrammar or tag == TRule then
         return checkaux(tree, pred, index + 1, lrcall)
     elseif tag == TCall then
-        if bit.band(tree.p[index].cap, 0xffff) ~= 0 then --left recursive rule
+        --left recursive rule
+        if bit.band(tree.p[index].cap, 0xffff) ~= 0 then
             local lr = index + tree.p[index].ps
             if lrcall[lr] then
                 return
@@ -399,12 +406,14 @@ local function getfirst(tree, follow, index, valuetable, lrcall)
     elseif tag == TSeq then
         if not checkaux(tree, PEnullable, index + 1) then
             return getfirst(tree, fullset, index + 1, valuetable, lrcall)
-        else -- FIRST(p1 p2, fl) = FIRST(p1, FIRST(p2, fl))
+            -- FIRST(p1 p2, fl) = FIRST(p1, FIRST(p2, fl))
+        else
             local e2, csaux = getfirst(tree, follow, index + tree.p[index].ps, valuetable, lrcall)
             local e1, firstset = getfirst(tree, csaux, index + 1, valuetable, lrcall)
             if e1 == 0 then -- 'e1' ensures that first can be used
-                return 0, firstset
-            elseif band(bor(e1, e2), 2) == 2 then -- one of the children has a matchtime?
+            return 0, firstset
+            -- one of the children has a matchtime?
+            elseif band(bor(e1, e2), 2) == 2 then
                 return 2, firstset -- pattern has a matchtime capture
             else
                 return e2, firstset -- else depends on 'e2'
@@ -418,7 +427,8 @@ local function getfirst(tree, follow, index, valuetable, lrcall)
         return 1, firstset -- accept the empty string
     elseif tag == TCapture or tag == TGrammar or tag == TRule then
         return getfirst(tree, follow, index + 1, valuetable, lrcall)
-    elseif tag == TRunTime then -- function invalidates any follow info.
+        -- function invalidates any follow info.
+    elseif tag == TRunTime then
         local e, firstset = getfirst(tree, fullset, index + 1, valuetable, lrcall)
         if e ~= 0 then
             return 2, firstset -- function is not "protected"?
@@ -426,7 +436,8 @@ local function getfirst(tree, follow, index, valuetable, lrcall)
             return 0, firstset -- pattern inside capture ensures first can be used
         end
     elseif tag == TCall then
-        if bit.band(tree.p[index].cap, 0xffff) ~= 0 then -- left recursive rule
+        -- left recursive rule
+        if bit.band(tree.p[index].cap, 0xffff) ~= 0 then
             local lr = index + tree.p[index].ps
             if lrcall[lr] then
                 return 0, settype()
@@ -450,7 +461,8 @@ local function getfirst(tree, follow, index, valuetable, lrcall)
         local e, firstset = getfirst(tree, follow, index + 1, valuetable, lrcall)
         ffi.copy(firstset, follow, ffi.sizeof(firstset))
         return bor(e, 1), firstset -- always can accept the empty string
-    elseif tag == TBehind then -- instruction gives no new information
+        -- instruction gives no new information
+    elseif tag == TBehind then
         -- call 'getfirst' to check for math-time captures
         local e, firstset = getfirst(tree, follow, index + 1, valuetable, lrcall)
         ffi.copy(firstset, follow, ffi.sizeof(firstset))
@@ -474,7 +486,8 @@ local function headfail(tree, index, lrcall)
     elseif tag == TCapture or tag == TGrammar or tag == TRule or tag == TAnd then
         return headfail(tree, index + 1, lrcall)
     elseif tag == TCall then
-        if bit.band(tree.p[index].cap, 0xffff) ~= 0 then -- left recursive rule
+        -- left recursive rule
+        if bit.band(tree.p[index].cap, 0xffff) ~= 0 then
             local lr = index + tree.p[index].ps
             if lrcall[lr] then
                 return true
@@ -730,7 +743,8 @@ local function codeand(code, tree, tt, index, valuetable)
         if n > 0 then
             addinstruction(code, IBehind, n)
         end
-    else -- default: Choice L1; p1; BackCommit L2; L1: Fail; L2:
+    else
+        -- default: Choice L1; p1; BackCommit L2; L1: Fail; L2:
         local pchoice = addinstruction(code, IChoice, 0)
         codegen(code, tree, fullset, false, tt, index, valuetable)
         local pcommit = addinstruction(code, IBackCommit, 0)
@@ -784,7 +798,7 @@ local function coderep(code, tree, opt, fl, index, valuetable)
         if headfail(tree, index) or (e1 == 0 and cs_disjoint(st, fl)) then
             -- L1: test (fail(p1)) -> L2; <p>; jmp L1; L2:
             local test = codetestset(code, st, 0, valuetable)
-            codegen(code, tree, fullset, opt, test, index, valuetable)
+            codegen(code, tree, fullset, false, test, index, valuetable)
             local jmp = addinstruction(code, IJmp, 0)
             jumptohere(code, test)
             jumptothere(code, jmp, test)
@@ -818,7 +832,8 @@ end
 local function codenot(code, tree, index, valuetable)
     local e, st = getfirst(tree, fullset, index, valuetable)
     local test = codetestset(code, st, e, valuetable)
-    if headfail(tree, index) then -- test (fail(p1)) -> L1; fail; L1:
+    -- test (fail(p1)) -> L1; fail; L1:
+    if headfail(tree, index) then
         addinstruction(code, IFail, 0)
     else
         -- test(fail(p))-> L1; choice L1; <p>; failtwice; L1:
@@ -840,7 +855,8 @@ local function correctcalls(code, positions, from, to)
             local n = code.p[i].offset; -- rule number
             local rule = positions[n]; -- rule position
             assert(rule == from or code.p[rule - 1].code == IRet)
-            if bit.band(code.p[i].val, 0xffff) == 0 and code.p[finaltarget(code, i + 1)].code == IRet then -- call; ret ?
+            -- call; ret ?
+            if bit.band(code.p[i].val, 0xffff) == 0 and code.p[finaltarget(code, i + 1)].code == IRet then
                 code.p[i].code = IJmp; -- tail call
             else
                 code.p[i].code = ICall;
@@ -891,55 +907,58 @@ local function codeseq(code, tree, fl, opt, tt, p1, p2, valuetable)
     if needfollow(tree, p1) then
         local _, fll = getfirst(tree, fl, p2, valuetable) -- p1 follow is p2 first
         codegen(code, tree, fll, false, tt, p1, valuetable)
-    else -- use 'fullset' as follow
+    else
+        -- use 'fullset' as follow
         codegen(code, tree, fullset, false, tt, p1, valuetable)
     end
-    if (fixedlenx(tree, 0, 0, p1) ~= 0) then -- can p1 consume anything?
+    -- can p1 consume anything?
+    if (fixedlenx(tree, 0, 0, p1) ~= 0) then
         tt = NOINST; -- invalidate test
     end
-    codegen(code, tree, fl, opt, tt, p2, valuetable)
+    return codegen(code, tree, fl, opt, tt, p2, valuetable)
 end
 
 
 -- Main code-generation function: dispatch to auxiliar functions
 -- according to kind of tree
 
--- code generation is recursive; 'opt' indicates that the code is
--- being generated under a 'IChoice' operator jumping to its end.
--- 'tt' points to a previous test protecting this code. 'fl' is
--- the follow set of the pattern.
+-- code generation is recursive; 'opt' indicates that the code is being
+-- generated as the last thing inside an optional pattern (so, if that
+-- code is optional too, it can reuse the 'IChoice' already in place for
+-- the outer pattern). 'tt' points to a previous test protecting this
+-- code (or NOINST). 'fl' is the follow set of the pattern.
 
 function codegen(code, tree, fl, opt, tt, index, valuetable)
     local tag = tree.p[index].tag
     if tag == TChar then
-        codechar(code, tree.p[index].val, tt)
+        return codechar(code, tree.p[index].val, tt)
     elseif tag == TAny then
-        addinstruction(code, IAny, 0)
+        return addinstruction(code, IAny, 0)
     elseif tag == TSet then
-        codecharset(code, valuetable[tree.p[index].val], tt, valuetable)
+        return codecharset(code, valuetable[tree.p[index].val], tt, valuetable)
     elseif tag == TTrue then
     elseif tag == TFalse then
-        addinstruction(code, IFail, 0)
+        return addinstruction(code, IFail, 0)
     elseif tag == TSeq then
-        codeseq(code, tree, fl, opt, tt, index + 1, index + tree.p[index].ps, valuetable)
+        return codeseq(code, tree, fl, opt, tt, index + 1, index + tree.p[index].ps, valuetable)
     elseif tag == TChoice then
-        codechoice(code, tree, fl, opt, index + 1, index + tree.p[index].ps, valuetable)
+        return codechoice(code, tree, fl, opt, index + 1, index + tree.p[index].ps, valuetable)
     elseif tag == TRep then
-        coderep(code, tree, opt, fl, index + 1, valuetable)
+        return coderep(code, tree, opt, fl, index + 1, valuetable)
     elseif tag == TBehind then
-        codebehind(code, tree, index, valuetable)
+        return codebehind(code, tree, index, valuetable)
     elseif tag == TNot then
-        codenot(code, tree, index + 1, valuetable)
+        return codenot(code, tree, index + 1, valuetable)
     elseif tag == TAnd then
-        codeand(code, tree, tt, index + 1, valuetable)
+        return codeand(code, tree, tt, index + 1, valuetable)
     elseif tag == TCapture then
-        codecapture(code, tree, fl, tt, index, valuetable)
+        return codecapture(code, tree, fl, tt, index, valuetable)
     elseif tag == TRunTime then
-        coderuntime(code, tree, tt, index, valuetable)
+        return coderuntime(code, tree, tt, index, valuetable)
     elseif tag == TGrammar then
-        codegrammar(code, tree, index, valuetable)
+        return codegrammar(code, tree, index, valuetable)
     elseif tag == TCall then
-        codecall(code, tree, index, tree.p[index].val)
+        return codecall(code, tree, index, tree.p[index].val)
     else
         assert(false)
     end
@@ -966,9 +985,11 @@ local function peephole(code)
         elseif tag == IJmp then
             local ft = finaltarget(code, i)
             local tag = code.p[ft].code -- jumping to what?
-            if tag == IRet or tag == IFail or tag == IFailTwice or tag == IEnd then -- instructions with unconditional implicit jumps
+            -- instructions with unconditional implicit jumps
+            if tag == IRet or tag == IFail or tag == IFailTwice or tag == IEnd then
                 ffi.copy(code.p + i, code.p + ft, ffi.sizeof(patternelement)) -- jump becomes that instruction
-            elseif tag == ICommit or tag == IPartialCommit or tag == IBackCommit then -- inst. with unconditional explicit jumps
+            elseif tag == ICommit or tag == IPartialCommit or tag == IBackCommit then
+                -- inst. with unconditional explicit jumps
                 local fft = finallabel(code, ft)
                 ffi.copy(code.p + i, code.p + ft, ffi.sizeof(patternelement)) -- jump becomes that instruction...
                 jumptothere(code, i, fft) -- but must correct its offset
