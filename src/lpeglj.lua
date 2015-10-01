@@ -675,7 +675,7 @@ end
 
 
 local function lp_substcapture(pat)
-    return capture_aux(Csubst, pat, 0)
+    return capture_aux(Csubst, pat)
 end
 
 
@@ -686,7 +686,7 @@ end
 
 local function lp_groupcapture(pat, val)
     if not val then
-        return capture_aux(Cgroup, pat, 0)
+        return capture_aux(Cgroup, pat)
     else
         return capture_aux(Cgroup, pat, val)
     end
@@ -700,12 +700,12 @@ end
 
 
 local function lp_simplecapture(pat)
-    return capture_aux(Csimple, pat, 0)
+    return capture_aux(Csimple, pat)
 end
 
 
 local function lp_poscapture()
-    return newemptycap(Cposition, 0)
+    return newemptycap(Cposition)
 end
 
 
@@ -741,10 +741,9 @@ local function lp_constcapture(...)
         -- create a group capture with all values
     else
         tree = treepattern(3 + 3 * (n - 1))
-        valuetable[tree.id] = { 0 }
+        valuetable[tree.id] = {}
         tree.p[0].tag = TCapture
         tree.p[0].cap = Cgroup
-        tree.p[0].val = 1
         local start = 1
         for i = 1, n - 1 do
             tree.p[start].tag = TSeq

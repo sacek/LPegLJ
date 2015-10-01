@@ -186,15 +186,13 @@ end
 local function adddyncaptures(s, base, index, n, fd, valuetable)
     -- Cgroup capture is already there
     assert(base[index].kind == Cgroup and base[index].siz == 0)
-    local ind = #valuetable + 1
-    valuetable[ind] = 0
-    base[index].idx = ind -- make it an anonymous group
+    base[index].idx = 0 -- make it an anonymous group
     base[index + 1] = {}
     -- add runtime captures
     for i = 1, n do
         base[index + i].kind = Cruntime
         base[index + i].siz = 1 -- mark it as closed
-        ind = #valuetable + 1
+        local ind = #valuetable + 1
         valuetable[ind] = fd[i + 1]
         base[index + i].idx = ind -- stack index of capture value
         base[index + i].s = s

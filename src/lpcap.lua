@@ -179,7 +179,7 @@ local function findback(cs, cap, name, valuetable)
         elseif cs.ocap[cap].siz == 0 then
             continue = true -- opening an enclosing capture: skip and get previous
         end
-        if not continue and cs.ocap[cap].kind == Cgroup then
+        if not continue and cs.ocap[cap].kind == Cgroup and cs.ocap[cap].idx ~= 0 then
             local gname = valuetable[cs.ocap[cap].idx] -- get group name
             -- right group?
             if name == gname then
@@ -215,7 +215,7 @@ local function tablecap(cs, out, valuetable)
         while cs.ocap[cs.cap].kind ~= Cclose do
             local subout = { outindex = 0, out = {} }
             -- named group?
-            if cs.ocap[cs.cap].kind == Cgroup and valuetable[cs.ocap[cs.cap].idx] ~= 0 then
+            if cs.ocap[cs.cap].kind == Cgroup and cs.ocap[cs.cap].idx ~= 0 then
                 local groupname = valuetable[cs.ocap[cs.cap].idx] -- push group name
                 pushonenestedvalue(cs, subout, valuetable)
                 t[groupname] = subout.out[1]
@@ -530,7 +530,7 @@ function pushcapture(cs, out, valuetable)
         return 1;
     elseif type == Cgroup then
         -- anonymous group?
-        if valuetable[cs.ocap[cs.cap].idx] == 0 then
+        if cs.ocap[cs.cap].idx == 0 then
             return pushnestedvalues(cs, false, out, valuetable); -- add all nested values
         else
             -- named group: add no values
@@ -599,7 +599,7 @@ local function getcapturesruntime(capture, s, stream, notdelete, min, max, capto
     local start = 0
     repeat -- collect their values
         if not checknextcap(cs, max) then break end
-        local notdelete = notdelete or capture[cs.cap].kind == Cgroup and valuetable[capture[cs.cap].idx] ~= 0 and capture[cs.cap].candelete == 0
+        local notdelete = notdelete or capture[cs.cap].kind == Cgroup and capture[cs.cap].idx ~= 0 and capture[cs.cap].candelete == 0
         pushcapture(cs, out, valuetable)
         if notdelete then
             start = cs.cap
