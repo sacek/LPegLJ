@@ -1,0 +1,46 @@
+package.path = "./lpeglj/?.ljs;" .. package.path;
+
+var vm = require("lpvm");
+var m = require("lpeglj");
+var re = require("re");
+
+var function checkeq(x, y, p) {
+    if( p ) { print(x, y); }
+    if( type(x) != "table" ) { assert(x == y);
+    } else {
+        for( k, v in pairs(x) ) { checkeq(v, y[k], p); }
+        for( k, v in pairs(y) ) { checkeq(v, x[k], p); }
+    }
+}
+
+print("Tests for LPegLJ pattern saving and loading");
+print("version " .. m.version());
+
+var c = re.compile([=[
+  s <-  ({(!longstring .)+} / longstring)*
+  longstring <- '[' {:init: '='* :} '[' close
+  close <- ']' =init ']' / . close
+]=]);
+
+var teststring = 'data1[=[insidedata1]=]data2[==[====]==]data3[[]]';
+
+var patfile = 'test.pat';
+
+var patdata = c->dump();
+c->save(patfile);
+
+var pat = m.load(patdata);
+checkeq({ pat->match(teststring) }, { "data1", "data2", "data3" });
+
+pat = m.loadfile(patfile);
+checkeq({ pat->match(teststring) }, { "data1", "data2", "data3" });
+
+// use only vm module (lpvm + lpcap)
+var valuetable;
+pat, valuetable = vm.load(patdata);
+checkeq({ vm.match(pat, teststring, 1, valuetable) }, { "data1", "data2", "data3" });
+
+pat, valuetable = vm.loadfile(patfile);
+checkeq({ vm.match(pat, teststring, 1, valuetable) }, { "data1", "data2", "data3" });
+
+print('OK');

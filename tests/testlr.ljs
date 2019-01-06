@@ -1,0 +1,208 @@
+package.path = "./lpeglj/?.ljs;" .. package.path;
+
+var lpeg = require("lpeglj");
+var re = require("re");
+
+var m = lpeg;
+
+var function checkeq(x, y, p) {
+    if( p ) { print(x, y); }
+    if( type(x) != "table" ) { assert(x == y);
+    } else {
+        for( k, v in pairs(x) ) { checkeq(v, y[k], p); }
+        for( k, v in pairs(y) ) { checkeq(v, x[k], p); }
+    }
+}
+
+print("Tests for LPegLJ left recursion");
+
+assert(type(m.version()) == "string");
+print("version " .. m.version());
+m.enableleftrecursion(true);
+
+/*
+direct left recursion
+E ← E + n / n
+--*/
+
+var pat = m.P({
+    "E";
+    E = m.V("E") * '+' * "n" + "n",
+});
+
+assert(pat->match("n+n+n") == 6);
+
+/*
+indirect left recursion
+L ← P.x / x
+P ← P(n) / L
+--*/
+
+pat = m.P({
+    "L";
+    L = m.V("P") * ".x" + "x",
+    P = m.V("P") * "(n)" + m.V("L")
+});
+
+assert(pat->match("x(n)(n).x(n).x") == 15);
+
+/*
+left and right recursion with precedence rules
+E ← E1 + E2 / E1 − E2 / E2 ∗ E3 / E2 ÷ E3 / E3 ∗∗ E3 / − E4 / (E1) / n
+--*/
+
+
+pat = m.P({
+    "E",
+    E = m.V("E", 1) * m.S('+-') * m.V("E", 2) +
+            m.V("E", 2) * m.S('*/') * m.V("E", 3) +
+            m.V("E", 3) * '**' * m.V("E", 3) +
+            '-' * m.V("E", 4) +
+            '(' * m.V("E") * ')' +
+            m.R('09') ** 1,
+});
+
+assert(pat->match("-1*(6+2/4+3-1)**2") == 18);
+
+/*
+left and right recursion with precedence rules
+E ← E1 + E2 / E1 − E2 / E2 ∗ E3 / E2 ÷ E3 / E3 ∗∗ E3 / − E4 / (E1) / n
+create AST tree
+--*/
+
+
+pat = m.P({
+    "E",
+    E = m.Ct(m.V("E", 1) * m.C(m.S('+-')) * m.V("E", 2) +
+            m.V("E", 2) * m.C(m.S('*/')) * m.V("E", 3) +
+            m.V("E", 3) * m.C('**') * m.V("E", 3) +
+            m.C('-') * m.V("E", 4) +
+            '(' * m.V("E") * ')' +
+            m.C(m.R('09') ** 1)),
+});
+
+var ASTtree = pat->match("1+1+1");
+checkeq(ASTtree, { { { "1" }, "+", { "1" } }, "+", { "1" } });
+
+ASTtree = pat->match("-1*(6+2/4+3-1)**2");
+checkeq(ASTtree, { { "-", { "1" } }, "*", { { { { { { "6" }, "+", { { "2" }, "/", { "4" } } }, "+", { "3" } }, "-", { "1" } } }, "**", { "2" } } });
+
+// using re module with precedence (the same example as above)
+// call_nonterminal : precedence_level or <call_nonterminal : precedence_level >
+
+pat = [=[
+     E <- (E:1 {[+-]} E:2 /
+          E:2 {[*/]} E:3 /
+          E:3 {'**'} E:3 /
+          {'-'} E:4 /
+          '(' E ')' /
+          {[0-9]+}) -> {}
+]=];
+
+ASTtree = re.match("-1*(6+2/4+3-1)**2", pat);
+checkeq(ASTtree, { { "-", { "1" } }, "*", { { { { { { "6" }, "+", { { "2" }, "/", { "4" } } }, "+", { "3" } }, "-", { "1" } } }, "**", { "2" } } });
+
+/*
+simple evaluator
+E ← E1 + E2 / E1 − E2 / E2 ∗ E3 / E2 ÷ E3 / E3 ∗∗ E3 / − E4 / (E1) / n
+--*/
+
+var eval = function(s, i, p1, p2, p3) {
+    var res;
+    if( p2 == '+' ) {
+        res = p1 + p3;
+    } else if( p2 == '-' ) {
+        res = p1 - p3;
+    } else if( p2 == '*' ) {
+        res = p1 * p3;
+    } else if( p2 == '/' ) {
+        res = p1 / p3;
+    } else if( p1 == '-' ) {
+        res = -p2;
+    } else if( p2 == '**' ) {
+        res = p1 ** p3;
+    } else {
+        res = p1;
+    }
+    return true, res;
+};
+
+
+pat = m.P({
+    "E",
+    E = m.Cmt(m.V("E", 1) * m.C(m.S('+-')) * m.V("E", 2) +
+            m.V("E", 2) * m.C(m.S('*/')) * m.V("E", 3) +
+            m.V("E", 3) * m.C('**') * m.V("E", 3) +
+            m.C('-') * m.V("E", 4) +
+            '(' * m.V("E") * ')' +
+            m.C(m.R('09') ** 1), eval),
+});
+
+assert(pat->match("-1*(6+2/4+3-1)**2") == -72.25);
+
+
+pat = m.P({
+    "E",
+    E = m.V("E", 1) * '+' * m.V("E", 2) / function(c1, c2) { return c1 + c2; } +
+            m.V("E", 1) * '-' * m.V("E", 2) / function(c1, c2) { return c1 - c2; } +
+            m.V("E", 2) * '*' * m.V("E", 3) / function(c1, c2) { return c1 * c2; } +
+            m.V("E", 2) * '/' * m.V("E", 3) / function(c1, c2) { return c1 / c2; } +
+            m.V("E", 3) * '**' * m.V("E", 3) / function(c1, c2) { return c1 ** c2; } +
+            '-' * m.V("E", 4) / function(c1) { return -c1; } +
+            '(' * m.V("E") * ')' +
+            m.C(m.R('09') ** 1),
+});
+
+assert(pat->match("-1*(6+2/4+3-1)**2") == -72.25);
+
+var def = {
+    plus = function(p1, p2) { return p1 + p2; },
+    minus = function(p1, p2) { return p1 - p2; },
+    mult = function(p1, p2) { return p1 * p2; },
+    div = function(p1, p2) { return p1 / p2; },
+    pow = function(p1, p2) { return p1 ** p2; },
+    uminus = function(p1) { return -p1; },
+    errfce = function(o, i) {
+        var errstr = o .. '\n' .. (' ')->rep(i) .. '^' .. '\n';
+        io.write(errstr);
+        return false;
+    },
+};
+
+pat = [=[
+     P <-  E s (!. / error)
+     s <- %s*
+     error <- '' => errfce
+     E <- (E:1 s'+' E:2) -> plus /
+          (E:1 s'-' E:2) -> minus /
+          (E:2 s'*' E:3) -> mult /
+          (E:2 s'/' E:3) -> div /
+          (E:3 s'**' E:3)-> pow /
+          (s'-' E:4) -> uminus /
+          s'(' E s')' /
+          s{[0-9]+} /
+          error
+]=];
+
+pat = re.compile(pat, def);
+assert(re.match("-1 * (6 + 2 / 4 + 3 - 1)**2", pat) == -72.25);
+
+pat = [=[
+     A <-  B "a"
+     B <-  C "b"
+     C <-  B / A / "c"
+]=];
+
+pat = re.compile(pat);
+assert(re.match("cbbabbba", pat) == 9);
+
+pat = [=[
+     S <- A / B
+     A <- A "a" / B / "a"
+     B <- B "b" / A / "b"
+]=];
+
+pat = re.compile(pat);
+assert(re.match("baabbaaa", pat) == 9);
+
+print("OK");
