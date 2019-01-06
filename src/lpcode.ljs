@@ -1,0 +1,1061 @@
+/*
+LPEGLJ
+lpcode.lua
+Generating code from tree
+Copyright (C) 2014 Rostislav Sacek.
+based on LPeg v1.0 - PEG pattern matching for Lua
+Lua.org & PUC-Rio  written by Roberto Ierusalimschy
+http://www.inf.puc-rio.br/~roberto/lpeg/
+
+** Permission is hereby granted, free of charge, to any person obtaining
+** a copy of this software and associated documentation files (the
+** "Software"), to deal in the Software without restriction, including
+** without limitation the rights to use, copy, modify, merge, publish,
+** distribute, sublicense, and/or sell copies of the Software, and to
+** permit persons to whom the Software is furnished to do so, subject to
+** the following conditions:
+**
+** The above copyright notice and this permission notice shall be
+** included in all copies or substantial portions of the Software.
+**
+** THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+** EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+** MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+** IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+** CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+** TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+** SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+**
+** [ MIT license: http://www.opensource.org/licenses/mit-license.php ]
+--*/
+var ffi = require ("ffi");
+require ("lpvm");
+
+var band, bor, bnot, rshift, lshift = bit.band, bit.bor, bit.bnot, bit.rshift, bit.lshift;
+
+var TChar = 0;
+var TSet = 1;
+var TAny = 2; // standard PEG elements
+var TTrue = 3;
+var TFalse = 4;
+var TRep = 5;
+var TSeq = 6;
+var TChoice = 7;
+var TNot = 8;
+var TAnd = 9;
+var TCall = 10;
+var TOpenCall = 11;
+var TRule = 12; // sib1 is rule's pattern, sib2 is 'next' rule
+var TGrammar = 13; // sib1 is initial (and first) rule
+var TBehind = 14; // match behind
+var TCapture = 15; // regular capture
+var TRunTime = 16; // run-time capture
+
+
+var IAny = 0; // if no char, fail
+var IChar = 1; // if char != val, fail
+var ISet = 2; // if char not in val, fail
+var ITestAny = 3; // in no char, jump to 'offset'
+var ITestChar = 4; // if char != val, jump to 'offset'
+var ITestSet = 5; // if char not in val, jump to 'offset'
+var ISpan = 6; // read a span of chars in val
+var IBehind = 7; // walk back 'val' characters (fail if not possible)
+var IRet = 8; // return from a rule
+var IEnd = 9; // end of pattern
+var IChoice = 10; // stack a choice; next fail will jump to 'offset'
+var IJmp = 11; // jump to 'offset'
+var ICall = 12; // call rule at 'offset'
+var IOpenCall = 13; // call rule number 'offset' (must be closed to a ICall)
+var ICommit = 14; // pop choice and jump to 'offset'
+var IPartialCommit = 15; // update top choice to current position and jump
+var IBackCommit = 16; // "fails" but jump to its own 'offset'
+var IFailTwice = 17; // pop one choice and then fail
+var IFail = 18; // go back to saved state on choice and jump to saved offset
+var IGiveup = 19; // internal use
+var IFullCapture = 20; // complete capture of last 'off' chars
+var IOpenCapture = 21; // start a capture
+var ICloseCapture = 22;
+var ICloseRunTime = 23;
+
+
+var Cclose = 0;
+var Cposition = 1;
+var Cconst = 2;
+var Cbackref = 3;
+var Carg = 4;
+var Csimple = 5;
+var Ctable = 6;
+var Cfunction = 7;
+var Cquery = 8;
+var Cstring = 9;
+var Cnum = 10;
+var Csubst = 11;
+var Cfold = 12;
+var Cruntime = 13;
+var Cgroup = 14;
+
+
+var PEnullable = 0;
+var PEnofail = 1;
+var RuleLR = 0x10000;
+var NOINST = -2;
+
+
+var MAXBEHINDPREDICATE = 255;
+var MAXRULES = 200;
+var MAXOFF = 0xF;
+
+// number of siblings for each tree
+var numsiblings = {
+    0, 0, 0, // char, set, any
+    0, 0, // true, false
+    1, // rep
+    2, 2, // seq, choice
+    1, 1, // not, and
+    0, 0, 2, 1, // call, opencall, rule, grammar
+    1, // behind
+    1, 1 // capture, runtime capture
+};
+
+
+
+var patternelement = ffi.typeof('PATTERN_ELEMENT');
+var pattern = ffi.typeof('PATTERN');
+var settype = ffi.typeof('int32_t[8]');
+var fullset = settype(-1, -1, -1, -1, -1, -1, -1, -1);
+
+// {======================================================
+// Analysis and some optimizations
+// =======================================================
+
+var codegen;
+
+
+// Check whether a charset is empty (IFail), singleton (IChar),
+// full (IAny), or none of those (ISet).
+
+var function charsettype(cs) {
+    var count = 0;
+    var candidate = -1; // candidate position for a char
+    for( i = 0, 8 - 1 ) {
+        var b = cs[i];
+        if( b == 0 ) {
+            if( count > 1 ) {
+                return ISet; // else set is still empty
+            }
+        } else if( b == -1 ) {
+            if( count < (i * 32) ) {
+                return ISet;
+            } else {
+                count +=   32; // set is still full
+            }
+            // byte has only one bit?
+        } else if( band(b, (b - 1)) == 0 ) {
+            if( count > 0 ) {
+                return ISet; // set is neither full nor empty
+                // set has only one char till now; track it
+            } else {
+                ++count    ;
+                candidate = i;
+            }
+        } else {
+            return ISet; // byte is neither empty, full, nor singleton
+        }
+    }
+    if( count == 0 ) {
+        return IFail, 0; // empty set
+        // singleton; find character bit inside byte
+    } else if( count == 1 ) {
+        var b = cs[candidate];
+        var c = candidate * 32;
+        for( i = 1, 32 ) {
+            if( b == 1 ) {
+                c = c + i - 1;
+                break;
+            }
+            b = rshift(b, 1);
+        }
+        return IChar, c;
+    } else if( count == 256 ) {
+        return IAny, 0; // full set
+    } else {
+        assert(false); // should have returned by now
+    }
+}
+
+
+// A few basic operations on Charsets
+
+var function cs_complement(cs) {
+    for( i = 0, 8 - 1 ) {
+        cs[i] = bnot(cs[i]);
+    }
+}
+
+
+var function cs_equal(cs1, cs2) {
+    for( i = 0, 8 - 1 ) {
+        if( cs1[i] != cs2[i] ) {
+            return;
+        }
+    }
+    return true;
+}
+
+
+// computes whether sets st1 and st2 are disjoint
+
+var function cs_disjoint(st1, st2) {
+    for( i = 0, 8 - 1 ) {
+        if( band(st1[i], st2[i]) != 0 ) {
+            return;
+        }
+    }
+    return true;
+}
+
+
+// Convert a 'char' pattern (TSet, TChar, TAny) to a charset
+
+var function tocharset(tree, index, valuetable) {
+    var val = settype();
+    if( tree.p[index].tag == TSet ) {
+        ffi.copy(val, valuetable[tree.p[index].val], ffi.sizeof(val));
+        return val;
+    } else if( tree.p[index].tag == TChar ) {
+        var b = tree.p[index].val;
+        // only one char
+        // add that one
+        val[rshift(b, 5)] = lshift(1, band(b, 31));
+        return val;
+    } else if( tree.p[index].tag == TAny ) {
+        ffi.fill(val, ffi.sizeof(val), 0xff);
+        return val;
+    }
+}
+
+
+// checks whether a pattern has captures
+
+var function hascaptures(tree, index) {
+    if( tree.p[index].tag == TCapture || tree.p[index].tag == TRunTime ) {
+        return true;
+    } else if( tree.p[index].tag == TCall ) {
+        return hascaptures(tree, index + tree.p[index].ps);
+    } else {
+        var ns = numsiblings[tree.p[index].tag + 1];
+        if( ns == 0 ) {
+            return;
+        } else if( ns == 1 ) {
+            return hascaptures(tree, index + 1);
+        } else if( ns == 2 ) {
+            if( hascaptures(tree, index + 1) ) {
+                return true;
+            } else {
+                return hascaptures(tree, index + tree.p[index].ps);
+            }
+        } else {
+            assert(false);
+        }
+    }
+}
+
+
+// Checks how a pattern behaves regarding the empty string,
+// in one of two different ways:
+// A pattern is *nullable* if it can match without consuming any character;
+// A pattern is *nofail* if it never fails for any string
+// (including the empty string).
+// The difference is only for predicates; for patterns without
+// predicates, the two properties are equivalent.
+// (With predicates, &'a' is nullable but not nofail. Of course,
+// nofail => nullable.)
+// These functions are all convervative in the following way:
+// p is nullable => nullable(p)
+// nofail(p) => p cannot fail
+// (The function assumes that TOpenCall and TRunTime are not nullable:
+// TOpenCall must be checked again when the grammar is fixed;
+// TRunTime is an arbitrary choice.)
+
+var function checkaux(tree, pred, index, lrcall) {
+    lrcall = lrcall || {};
+    var tag = tree.p[index].tag;
+    if( tag == TChar || tag == TSet || tag == TAny ||
+            tag == TFalse || tag == TOpenCall ) {
+        return; // not nullable
+    } else if( tag == TRep || tag == TTrue ) {
+        return true; // no fail
+    } else if( tag == TNot || tag == TBehind ) {
+        // can match empty, but may fail
+        if( pred == PEnofail ) {
+            return;
+        } else {
+            return true; // PEnullable
+        }
+    } else if( tag == TAnd ) {
+        // can match empty; fail iff body does
+        if( pred == PEnullable ) {
+            return true;
+        } else {
+            return checkaux(tree, pred, index + 1, lrcall);
+        }
+        // can fail; match empty iff body does
+    } else if( tag == TRunTime ) {
+        if( pred == PEnofail ) {
+            return;
+        } else {
+            return checkaux(tree, pred, index + 1, lrcall);
+        }
+    } else if( tag == TSeq ) {
+        if( ! checkaux(tree, pred, index + 1, lrcall) ) {
+            return;
+        } else {
+            return checkaux(tree, pred, index + tree.p[index].ps, lrcall);
+        }
+    } else if( tag == TChoice ) {
+        if( checkaux(tree, pred, index + tree.p[index].ps, lrcall) ) {
+            return true;
+        } else {
+            return checkaux(tree, pred, index + 1, lrcall);
+        }
+    } else if( tag == TCapture || tag == TGrammar || tag == TRule ) {
+        return checkaux(tree, pred, index + 1, lrcall);
+    } else if( tag == TCall ) {
+        //left recursive rule
+        if( bit.band(tree.p[index].cap, 0xffff) != 0 ) {
+            var lr = index + tree.p[index].ps;
+            if( lrcall[lr] ) {
+                return;
+            }
+            lrcall[lr] = true;
+        }
+        return checkaux(tree, pred, index + tree.p[index].ps, lrcall);
+    } else {
+        assert(false);
+    }
+}
+
+
+// number of characters to match a pattern (or -1 if variable)
+// ('count' avoids infinite loops for grammars)
+
+var function fixedlenx(tree, count, len, index) {
+    var tag = tree.p[index].tag;
+    if( tag == TChar || tag == TSet || tag == TAny ) {
+        return len + 1;
+    } else if( tag == TFalse || tag == TTrue || tag == TNot || tag == TAnd || tag == TBehind ) {
+        return len;
+    } else if( tag == TRep || tag == TRunTime || tag == TOpenCall ) {
+        return -1;
+    } else if( tag == TCapture || tag == TRule || tag == TGrammar ) {
+        return fixedlenx(tree, count, len, index + 1);
+    } else if( tag == TCall ) {
+        if( count >= MAXRULES ) {
+            return -1; // may be a loop
+        } else {
+            return fixedlenx(tree, count + 1, len, index + tree.p[index].ps);
+        }
+    } else if( tag == TSeq ) {
+        len = fixedlenx(tree, count, len, index + 1);
+        if( (len < 0) ) {
+            return -1;
+        } else {
+            return fixedlenx(tree, count, len, index + tree.p[index].ps);
+        }
+    } else if( tag == TChoice ) {
+        var n1 = fixedlenx(tree, count, len, index + 1);
+        if( n1 < 0 ) { return -1; }
+        var n2 = fixedlenx(tree, count, len, index + tree.p[index].ps);
+        if( n1 == n2 ) {
+            return n1;
+        } else {
+            return -1;
+        }
+    } else {
+        assert(false);
+    }
+}
+
+
+// Computes the 'first set' of a pattern.
+// The result is a conservative aproximation:
+//   match p ax -> x' for some x ==> a in first(p).
+//   match p '' -> ''            ==> returns 1.
+// The set 'follow' is the first set of what follows the
+// pattern (full set if nothing follows it)
+
+var function getfirst(tree, follow, index, valuetable, lrcall) {
+    lrcall = lrcall || {};
+    var tag = tree.p[index].tag;
+    if( tag == TChar || tag == TSet || tag == TAny ) {
+        var firstset = tocharset(tree, index, valuetable);
+        return 0, firstset;
+    } else if( tag == TTrue ) {
+        var firstset = settype();
+        ffi.copy(firstset, follow, ffi.sizeof(firstset));
+        return 1, firstset;
+    } else if( tag == TFalse ) {
+        var firstset = settype();
+        return 0, firstset;
+    } else if( tag == TChoice ) {
+        var e1, firstset = getfirst(tree, follow, index + 1, valuetable, lrcall);
+        var e2, csaux = getfirst(tree, follow, index + tree.p[index].ps, valuetable, lrcall);
+        for( i = 0, 8 - 1 ) {
+            firstset[i] = bor(firstset[i], csaux[i]);
+        }
+        return bor(e1, e2), firstset;
+    } else if( tag == TSeq ) {
+        if( ! checkaux(tree, PEnullable, index + 1) ) {
+            return getfirst(tree, fullset, index + 1, valuetable, lrcall);
+            // FIRST(p1 p2, fl) = FIRST(p1, FIRST(p2, fl))
+        } else {
+            var e2, csaux = getfirst(tree, follow, index + tree.p[index].ps, valuetable, lrcall);
+            var e1, firstset = getfirst(tree, csaux, index + 1, valuetable, lrcall);
+            if( e1 == 0 ) { // 'e1' ensures that first can be used
+            return 0, firstset;
+            // one of the children has a matchtime?
+            } else if( band(bor(e1, e2), 2) == 2 ) {
+                return 2, firstset; // pattern has a matchtime capture
+            } else {
+                return e2, firstset; // else depends on 'e2'
+            }
+        }
+    } else if( tag == TRep ) {
+        var _, firstset = getfirst(tree, follow, index + 1, valuetable, lrcall);
+        for( i = 0, 8 - 1 ) {
+            firstset[i] = bor(firstset[i], follow[i]);
+        }
+        return 1, firstset; // accept the empty string
+    } else if( tag == TCapture || tag == TGrammar || tag == TRule ) {
+        return getfirst(tree, follow, index + 1, valuetable, lrcall);
+        // function invalidates any follow info.
+    } else if( tag == TRunTime ) {
+        var e, firstset = getfirst(tree, fullset, index + 1, valuetable, lrcall);
+        if( e != 0 ) {
+            return 2, firstset; // function is not "protected"?
+        } else {
+            return 0, firstset; // pattern inside capture ensures first can be used
+        }
+    } else if( tag == TCall ) {
+        // left recursive rule
+        if( bit.band(tree.p[index].cap, 0xffff) != 0 ) {
+            var lr = index + tree.p[index].ps;
+            if( lrcall[lr] ) {
+                return 0, settype();
+            } else {
+                lrcall[lr] = true;
+            }
+        }
+        return getfirst(tree, follow, index + tree.p[index].ps, valuetable, lrcall);
+    } else if( tag == TAnd ) {
+        var e, firstset = getfirst(tree, follow, index + 1, valuetable, lrcall);
+        for( i = 0, 8 - 1 ) {
+            firstset[i] = band(firstset[i], follow[i]);
+        }
+        return e, firstset;
+    } else if( tag == TNot ) {
+        var firstset = tocharset(tree, index + 1, valuetable);
+        if( firstset ) {
+            cs_complement(firstset);
+            return 1, firstset;
+        }
+		var e;
+        e, firstset = getfirst(tree, follow, index + 1, valuetable, lrcall);
+        ffi.copy(firstset, follow, ffi.sizeof(firstset));
+        return bor(e, 1), firstset; // always can accept the empty string
+        // instruction gives no new information
+    } else if( tag == TBehind ) {
+        // call 'getfirst' to check for math-time captures
+        var e, firstset = getfirst(tree, follow, index + 1, valuetable, lrcall);
+        ffi.copy(firstset, follow, ffi.sizeof(firstset));
+        return bor(e, 1), firstset; // always can accept the empty string
+    } else {
+        assert(false);
+    }
+}
+
+
+// If it returns true, then pattern can fail only depending on the next
+// character of the subject
+
+var function headfail(tree, index, lrcall) {
+    lrcall = lrcall || {};
+    var tag = tree.p[index].tag;
+    if( tag == TChar || tag == TSet || tag == TAny || tag == TFalse ) {
+        return true;
+    } else if( tag == TTrue || tag == TRep || tag == TRunTime || tag == TNot || tag == TBehind ) {
+        return;
+    } else if( tag == TCapture || tag == TGrammar || tag == TRule || tag == TAnd ) {
+        return headfail(tree, index + 1, lrcall);
+    } else if( tag == TCall ) {
+        // left recursive rule
+        if( bit.band(tree.p[index].cap, 0xffff) != 0 ) {
+            var lr = index + tree.p[index].ps;
+            if( lrcall[lr] ) {
+                return true;
+            } else {
+                lrcall[lr] = true;
+            }
+        }
+        return headfail(tree, index + tree.p[index].ps, lrcall);
+    } else if( tag == TSeq ) {
+        if( ! checkaux(tree, PEnofail, index + tree.p[index].ps) ) {
+            return;
+        } else {
+            return headfail(tree, index + 1, lrcall);
+        }
+    } else if( tag == TChoice ) {
+        if( ! headfail(tree, index + 1, lrcall) ) {
+            return;
+        } else {
+            return headfail(tree, index + tree.p[index].ps, lrcall);
+        }
+    } else {
+        assert(false);
+    }
+}
+
+
+// Check whether the code generation for the given tree can benefit
+// from a follow set (to avoid computing the follow set when it is
+// not needed)
+
+var function needfollow(tree, index) {
+    var tag = tree.p[index].tag;
+    if( tag == TChar || tag == TSet || tag == TAny || tag == TFalse || tag == TTrue || tag == TAnd || tag == TNot ||
+            tag == TRunTime || tag == TGrammar || tag == TCall || tag == TBehind ) {
+        return;
+    } else if( tag == TChoice || tag == TRep ) {
+        return true;
+    } else if( tag == TCapture ) {
+        return needfollow(tree, index + 1);
+    } else if( tag == TSeq ) {
+        return needfollow(tree, index + tree.p[index].ps);
+    } else {
+        assert(false);
+    }
+}
+
+// ======================================================
+
+
+// {======================================================
+// Code generation
+// =======================================================
+
+
+// code generation is recursive; 'opt' indicates that the code is
+// being generated under a 'IChoice' operator jumping to its end.
+// 'tt' points to a previous test protecting this code. 'fl' is
+// the follow set of the pattern.
+
+
+var function addinstruction(code, op, val) {
+    var size = code.size;
+    if( size >= code.allocsize ) {
+        code->doublesize();
+    }
+    code.p[size].code = op;
+    code.p[size].val = val;
+    code.size = size + 1;
+    return size;
+}
+
+
+var function setoffset(code, instruction, offset) {
+    code.p[instruction].offset = offset;
+}
+
+
+// Add a capture instruction:
+// 'op' is the capture instruction; 'cap' the capture kind;
+// 'key' the key into ktable; 'aux' is optional offset
+
+var function addinstcap(code, op, cap, key, aux) {
+    var i = addinstruction(code, op, bor(cap, lshift(aux, 4)));
+    setoffset(code, i, key);
+    return i;
+}
+
+
+var function jumptothere(code, instruction, target) {
+    if( instruction >= 0 ) {
+        setoffset(code, instruction, target - instruction);
+    }
+}
+
+
+var function jumptohere(code, instruction) {
+    jumptothere(code, instruction, code.size);
+}
+
+
+// Code an IChar instruction, or IAny if there is an equivalent
+// test dominating it
+
+var function codechar(code, c, tt) {
+    assert(tt != -1);
+    if( tt >= 0 && code.p[tt].code == ITestChar &&
+            code.p[tt].val == c ) {
+        addinstruction(code, IAny, 0);
+    } else {
+        addinstruction(code, IChar, c);
+    }
+}
+
+
+// Code an ISet instruction
+
+var function coderealcharset(code, cs, valuetable) {
+    var ind = #valuetable + 1;
+    valuetable[ind] = cs;
+    return addinstruction(code, ISet, ind);
+}
+
+
+// code a char set, optimizing unit sets for IChar, "complete"
+// sets for IAny, and empty sets for IFail; also use an IAny
+// when instruction is dominated by an equivalent test.
+
+var function codecharset(code, cs, tt, valuetable) {
+    var op, c = charsettype(cs);
+    if( op == IChar ) {
+        codechar(code, c, tt);
+    } else if( op == ISet ) {
+        assert(tt != -1);
+        if( tt >= 0 && code.p[tt].code == ITestSet &&
+                cs_equal(cs, valuetable[code.p[tt].val]) ) {
+            addinstruction(code, IAny, 0);
+        } else {
+            coderealcharset(code, cs, valuetable);
+        }
+    } else {
+        addinstruction(code, op, c);
+    }
+}
+
+
+// code a test set, optimizing unit sets for ITestChar, "complete"
+// sets for ITestAny, and empty sets for IJmp (always fails).
+// 'e' is true iff test should accept the empty string. (Test
+// instructions in the current VM never accept the empty string.)
+
+var function codetestset(code, cs, e, valuetable) {
+    if( e != 0 ) {
+        return NOINST; // no test
+    } else {
+        var pos = code.size;
+        codecharset(code, cs, NOINST, valuetable);
+        var inst = code.p[pos];
+        code = inst.code;
+        if( code == IFail ) {
+            inst.code = IJmp; // always jump
+        } else if( code == IAny ) {
+            inst.code = ITestAny;
+        } else if( code == IChar ) {
+            inst.code = ITestChar;
+        } else if( code == ISet ) {
+            inst.code = ITestSet;
+        } else {
+            assert(false);
+        }
+        return pos;
+    }
+}
+
+
+// Find the final destination of a sequence of jumps
+
+var function finaltarget(code, i) {
+    while( code.p[i].code == IJmp ) {
+        i +=   code.p[i].offset;
+    }
+    return i;
+}
+
+
+// final label (after traversing any jumps)
+
+var function finallabel(code, i) {
+    return finaltarget(code, i + code.p[i].offset);
+}
+
+// <behind(p)> == behind n; <p>   (where n = fixedlen(p))
+
+var function codebehind(code, tree, index, valuetable) {
+    if( tree.p[index].val > 0 ) {
+        addinstruction(code, IBehind, tree.p[index].val);
+    }
+    codegen(code, tree, fullset, false, NOINST, index + 1, valuetable); //  NOINST
+}
+
+
+// Choice; optimizations:
+// - when p1 is headfail
+// - when first(p1) and first(p2) are disjoint; than
+// a character not in first(p1) cannot go to p1, and a character
+// in first(p1) cannot go to p2 (at it is not in first(p2)).
+// (The optimization is not valid if p1 accepts the empty string,
+// as then there is no character at all...)
+// - when p2 is empty and opt is true; a IPartialCommit can resuse
+// the Choice already active in the stack.
+
+var function codechoice(code, tree, fl, opt, p1, p2, valuetable) {
+    var emptyp2 = tree.p[p2].tag == TTrue;
+    var e1, st1 = getfirst(tree, fullset, p1, valuetable);
+    var _, st2 = getfirst(tree, fl, p2, valuetable);
+    if( headfail(tree, p1) || (e1 == 0 && cs_disjoint(st1, st2)) ) {
+        // <p1 / p2> == test (fail(p1)) -> L1 ; p1 ; jmp L2; L1: p2; L2:
+        var test = codetestset(code, st1, 0, valuetable);
+        var jmp = NOINST;
+        codegen(code, tree, fl, false, test, p1, valuetable);
+        if( ! emptyp2 ) {
+            jmp = addinstruction(code, IJmp, 0);
+        }
+        jumptohere(code, test);
+        codegen(code, tree, fl, opt, NOINST, p2, valuetable);
+        jumptohere(code, jmp);
+    } else if( opt && emptyp2 ) {
+        // p1? == IPartialCommit; p1
+        jumptohere(code, addinstruction(code, IPartialCommit, 0));
+        codegen(code, tree, fullset, true, NOINST, p1, valuetable);
+    } else {
+        // <p1 / p2> ==
+        //  test(fail(p1)) -> L1; choice L1; <p1>; commit L2; L1: <p2>; L2:
+        var test = codetestset(code, st1, e1, valuetable);
+        var pchoice = addinstruction(code, IChoice, 0);
+        codegen(code, tree, fullset, emptyp2, test, p1, valuetable);
+        var pcommit = addinstruction(code, ICommit, 0);
+        jumptohere(code, pchoice);
+        jumptohere(code, test);
+        codegen(code, tree, fl, opt, NOINST, p2, valuetable);
+        jumptohere(code, pcommit);
+    }
+}
+
+
+// And predicate
+// optimization: fixedlen(p) = n ==> <&p> == <p>; behind n
+// (valid only when 'p' has no captures)
+
+var function codeand(code, tree, tt, index, valuetable) {
+    var n = fixedlenx(tree, 0, 0, index);
+    if( n >= 0 && n <= MAXBEHINDPREDICATE && ! hascaptures(tree, index) ) {
+        codegen(code, tree, fullset, false, tt, index, valuetable);
+        if( n > 0 ) {
+            addinstruction(code, IBehind, n);
+        }
+    } else {
+        // default: Choice L1; p1; BackCommit L2; L1: Fail; L2:
+        var pchoice = addinstruction(code, IChoice, 0);
+        codegen(code, tree, fullset, false, tt, index, valuetable);
+        var pcommit = addinstruction(code, IBackCommit, 0);
+        jumptohere(code, pchoice);
+        addinstruction(code, IFail, 0);
+        jumptohere(code, pcommit);
+    }
+}
+
+
+// Captures: if pattern has fixed (and not too big) length, use
+// a single IFullCapture instruction after the match; otherwise,
+// enclose the pattern with OpenCapture - CloseCapture.
+
+var function codecapture(code, tree, fl, tt, index, valuetable) {
+    var len = fixedlenx(tree, 0, 0, index + 1);
+    if( len >= 0 && len <= MAXOFF && ! hascaptures(tree, index + 1) ) {
+        codegen(code, tree, fl, false, tt, index + 1, valuetable);
+        addinstcap(code, IFullCapture, tree.p[index].cap, tree.p[index].val, len);
+    } else {
+        addinstcap(code, IOpenCapture, tree.p[index].cap, tree.p[index].val, 0);
+        codegen(code, tree, fl, false, tt, index + 1, valuetable);
+        addinstcap(code, ICloseCapture, Cclose, 0, 0);
+    }
+}
+
+
+var function coderuntime(code, tree, tt, index, valuetable) {
+    addinstcap(code, IOpenCapture, Cgroup, tree.p[index].val, 0);
+    codegen(code, tree, fullset, false, tt, index + 1, valuetable);
+    addinstcap(code, ICloseRunTime, Cclose, 0, 0);
+}
+
+
+// Repetion; optimizations:
+// When pattern is a charset, can use special instruction ISpan.
+// When pattern is head fail, or if it starts with characters that
+// are disjoint from what follows the repetions, a simple test
+// is enough (a fail inside the repetition would backtrack to fail
+// again in the following pattern, so there is no need for a choice).
+// When 'opt' is true, the repetion can reuse the Choice already
+// active in the stack.
+
+var function coderep(code, tree, opt, fl, index, valuetable) {
+    var st = tocharset(tree, index, valuetable);
+    if( st ) {
+        var op = coderealcharset(code, st, valuetable);
+        code.p[op].code = ISpan;
+    } else {
+        var e1;
+        e1, st = getfirst(tree, fullset, index, valuetable);
+        if( headfail(tree, index) || (e1 == 0 && cs_disjoint(st, fl)) ) {
+            // L1: test (fail(p1)) -> L2; <p>; jmp L1; L2:
+            var test = codetestset(code, st, 0, valuetable);
+            codegen(code, tree, fullset, false, test, index, valuetable);
+            var jmp = addinstruction(code, IJmp, 0);
+            jumptohere(code, test);
+            jumptothere(code, jmp, test);
+        } else {
+            // test(fail(p1)) -> L2; choice L2; L1: <p>; partialcommit L1; L2:
+            // or (if 'opt'): partialcommit L1; L1: <p>; partialcommit L1;
+            var test = codetestset(code, st, e1, valuetable);
+            var pchoice = NOINST;
+            if( opt ) {
+                jumptohere(code, addinstruction(code, IPartialCommit, 0));
+            } else {
+                pchoice = addinstruction(code, IChoice, 0);
+            }
+            var l2 = code.size;
+            codegen(code, tree, fullset, false, NOINST, index, valuetable);
+            var commit = addinstruction(code, IPartialCommit, 0);
+            jumptothere(code, commit, l2);
+            jumptohere(code, pchoice);
+            jumptohere(code, test);
+        }
+    }
+}
+
+
+// Not predicate; optimizations:
+// In any case, if first test fails, 'not' succeeds, so it can jump to
+// the end. If pattern is headfail, that is all (it cannot fail
+// in other parts); this case includes 'not' of simple sets. Otherwise,
+// use the default code (a choice plus a failtwice).
+
+var function codenot(code, tree, index, valuetable) {
+    var e, st = getfirst(tree, fullset, index, valuetable);
+    var test = codetestset(code, st, e, valuetable);
+    // test (fail(p1)) -> L1; fail; L1:
+    if( headfail(tree, index) ) {
+        addinstruction(code, IFail, 0);
+    } else {
+        // test(fail(p))-> L1; choice L1; <p>; failtwice; L1:
+        var pchoice = addinstruction(code, IChoice, 0);
+        codegen(code, tree, fullset, false, NOINST, index, valuetable);
+        addinstruction(code, IFailTwice, 0);
+        jumptohere(code, pchoice);
+    }
+    jumptohere(code, test);
+}
+
+
+// change open calls to calls, using list 'positions' to find
+// correct offsets; also optimize tail calls
+
+var function correctcalls(code, positions, from, to) {
+    for( i = from, to - 1 ) {
+        if( code.p[i].code == IOpenCall ) {
+            var n = code.p[i].offset; // rule number
+            var rule = positions[n]; // rule position
+            assert(rule == from || code.p[rule - 1].code == IRet);
+            // call; ret ?
+            if( bit.band(code.p[i].val, 0xffff) == 0 && code.p[finaltarget(code, i + 1)].code == IRet ) {
+                code.p[i].code = IJmp; // tail call
+            } else {
+                code.p[i].code = ICall;
+            }
+            jumptothere(code, i, rule); // call jumps to respective rule
+        }
+    }
+}
+
+
+// Code for a grammar:
+// call L1; jmp L2; L1: rule 1; ret; rule 2; ret; ...; L2:
+
+var function codegrammar(code, tree, index, valuetable) {
+    var positions = {};
+    var rulenumber = 1;
+    //    tree.p[rule].tag
+    var rule = index + 1;
+    assert(tree.p[rule].tag == TRule);
+    var LR = 0;
+    if( band(RuleLR, tree.p[rule].cap) != 0 ) { LR = 1; }
+    var firstcall = addinstruction(code, ICall, LR); // call initial rule
+    code.p[firstcall].aux = tree.p[rule].val;
+    var jumptoend = addinstruction(code, IJmp, 0); // jump to the end
+    jumptohere(code, firstcall); // here starts the initial rule
+    while( tree.p[rule].tag == TRule ) {
+        positions[rulenumber] = code.size; // save rule position
+        ++rulenumber    ;
+        codegen(code, tree, fullset, false, NOINST, rule + 1, valuetable); // code rule
+        addinstruction(code, IRet, 0);
+        rule +=   tree.p[rule].ps;
+    }
+    assert(tree.p[rule].tag == TTrue);
+    jumptohere(code, jumptoend);
+    correctcalls(code, positions, firstcall + 2, code.size);
+}
+
+
+var function codecall(code, tree, index, val) {
+    var c = addinstruction(code, IOpenCall, tree.p[index].cap); // to be corrected later
+    code.p[c].aux = val;
+    assert(tree.p[index + tree.p[index].ps].tag == TRule);
+    setoffset(code, c, band(tree.p[index + tree.p[index].ps].cap, 0x7fff)); // offset = rule number
+}
+
+
+var function codeseq(code, tree, fl, opt, tt, p1, p2, valuetable) {
+    if( needfollow(tree, p1) ) {
+        var _, fll = getfirst(tree, fl, p2, valuetable); // p1 follow is p2 first
+        codegen(code, tree, fll, false, tt, p1, valuetable);
+    } else {
+        // use 'fullset' as follow
+        codegen(code, tree, fullset, false, tt, p1, valuetable);
+    }
+    // can p1 consume anything?
+    if( (fixedlenx(tree, 0, 0, p1) != 0) ) {
+        tt = NOINST; // invalidate test
+    }
+    return codegen(code, tree, fl, opt, tt, p2, valuetable);
+}
+
+
+// Main code-generation function: dispatch to auxiliar functions
+// according to kind of tree
+
+// code generation is recursive; 'opt' indicates that the code is being
+// generated as the last thing inside an optional pattern (so, if that
+// code is optional too, it can reuse the 'IChoice' already in place for
+// the outer pattern). 'tt' points to a previous test protecting this
+// code (or NOINST). 'fl' is the follow set of the pattern.
+
+function codegen(code, tree, fl, opt, tt, index, valuetable) {
+    var tag = tree.p[index].tag;
+    if( tag == TChar ) {
+        return codechar(code, tree.p[index].val, tt);
+    } else if( tag == TAny ) {
+        return addinstruction(code, IAny, 0);
+    } else if( tag == TSet ) {
+        return codecharset(code, valuetable[tree.p[index].val], tt, valuetable);
+    } else if( tag == TTrue ) {
+    } else if( tag == TFalse ) {
+        return addinstruction(code, IFail, 0);
+    } else if( tag == TSeq ) {
+        return codeseq(code, tree, fl, opt, tt, index + 1, index + tree.p[index].ps, valuetable);
+    } else if( tag == TChoice ) {
+        return codechoice(code, tree, fl, opt, index + 1, index + tree.p[index].ps, valuetable);
+    } else if( tag == TRep ) {
+        return coderep(code, tree, opt, fl, index + 1, valuetable);
+    } else if( tag == TBehind ) {
+        return codebehind(code, tree, index, valuetable);
+    } else if( tag == TNot ) {
+        return codenot(code, tree, index + 1, valuetable);
+    } else if( tag == TAnd ) {
+        return codeand(code, tree, tt, index + 1, valuetable);
+    } else if( tag == TCapture ) {
+        return codecapture(code, tree, fl, tt, index, valuetable);
+    } else if( tag == TRunTime ) {
+        return coderuntime(code, tree, tt, index, valuetable);
+    } else if( tag == TGrammar ) {
+        return codegrammar(code, tree, index, valuetable);
+    } else if( tag == TCall ) {
+        return codecall(code, tree, index, tree.p[index].val);
+    } else {
+        assert(false);
+    }
+}
+
+
+// Optimize jumps and other jump-like instructions.
+// * Update labels of instructions with labels to their final
+// destinations (e.g., choice L1; ... L1: jmp L2: becomes
+// choice L2)
+// * Jumps to other instructions that do jumps become those
+// instructions (e.g., jump to return becomes a return; jump
+// to commit becomes a commit)
+
+var function peephole(code) {
+    var i = 0;
+    while( i < code.size ) {
+        var tag = code.p[i].code;
+        if( tag == IChoice || tag == ICall || tag == ICommit || tag == IPartialCommit ||
+                tag == IBackCommit || tag == ITestChar || tag == ITestSet || tag == ITestAny ) {
+            // instructions with labels
+            jumptothere(code, i, finallabel(code, i)); // optimize label
+
+        } else if( tag == IJmp ) {
+            var ft = finaltarget(code, i);
+            tag = code.p[ft].code; // jumping to what?
+            // instructions with unconditional implicit jumps
+            if( tag == IRet || tag == IFail || tag == IFailTwice || tag == IEnd ) {
+                ffi.copy(code.p + i, code.p + ft, ffi.sizeof(patternelement)); // jump becomes that instruction
+            } else if( tag == ICommit || tag == IPartialCommit || tag == IBackCommit ) {
+                // inst. with unconditional explicit jumps
+                var fft = finallabel(code, ft);
+                ffi.copy(code.p + i, code.p + ft, ffi.sizeof(patternelement)); // jump becomes that instruction...
+                jumptothere(code, i, fft); // but must correct its offset
+                --i; // reoptimize its label
+            } else {
+                jumptothere(code, i, ft); // optimize label
+            }
+        }
+        ++i    ;
+    }
+}
+
+
+// Compile a pattern
+
+var function compile(tree, index, valuetable) {
+    var code = pattern();
+    codegen(code, tree, fullset, false, NOINST, index, valuetable);
+    addinstruction(code, IEnd, 0);
+    peephole(code);
+    ffi.C.free(tree.code);
+    tree.code = code;
+}
+
+var function pat_new(ct, size) {
+    size = size || 0;
+    var allocsize = size;
+    if( allocsize < 10 ) {
+        allocsize = 10;
+    }
+    var pat = ffi.cast('PATTERN*', ffi.C.malloc(ffi.sizeof(pattern)));
+    assert(pat != null);
+    pat.allocsize = allocsize;
+    pat.size = size;
+    pat.p = ffi.C.malloc(ffi.sizeof(patternelement) * allocsize);
+    assert(pat.p != null);
+    ffi.fill(pat.p, ffi.sizeof(patternelement) * allocsize);
+    return pat;
+}
+
+
+var function doublesize(ct) {
+    ct.p = ffi.C.realloc(ct.p, ffi.sizeof(patternelement) * ct.allocsize * 2);
+    assert(ct.p != null);
+    ffi.fill(ct.p + ct.allocsize, ffi.sizeof(patternelement) * ct.allocsize);
+    ct.allocsize = ct.allocsize * 2;
+}
+
+var pattreg = {
+    doublesize = doublesize,
+};
+
+var metareg = {
+    ["__new"] = pat_new,
+    ["__index"] = pattreg
+};
+
+ffi.metatype(pattern, metareg);
+
+return {
+    checkaux = checkaux,
+    tocharset = tocharset,
+    fixedlenx = fixedlenx,
+    hascaptures = hascaptures,
+    compile = compile,
+};

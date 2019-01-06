@@ -1,0 +1,189 @@
+package.path = "./lpeglj/?.ljs;" .. package.path;
+
+var m = require("lpeglj");
+var re = require("re");
+
+var function checkeq(x, y, p) {
+    if( p ) { print(x, y); }
+    if( type(x) != "table" ) { assert(x == y);
+    } else {
+        for( k, v in pairs(x) ) { checkeq(v, y[k], p); }
+        for( k, v in pairs(y) ) { checkeq(v, x[k], p); }
+    }
+}
+
+var ret;
+
+print("Tests for LPegLJ stream mode");
+
+assert(type(m.version()) == "string");
+print("version " .. m.version());
+
+var pat = m.C('abcd') * m.C('x');
+var fce = pat->streammatch();
+
+ret = { fce("a") };
+checkeq(ret, { 1 });
+ret = { fce("b") };
+checkeq(ret, { 1 });
+ret = { fce("c") };
+checkeq(ret, { 1 });
+ret = { fce("d") };
+checkeq(ret, { 1, "abcd" });
+ret = { fce("x") };
+checkeq(ret, { 0, 'x' });
+
+pat = m.C('abcd') * m.C('x') + m.C('abcd') * m.C('y');
+fce = pat->streammatch();
+ret = { fce("abcd") };
+checkeq(ret, { 1 });
+ret = { fce("y") };
+checkeq(ret, { 0, "abcd", "y" });
+
+pat = m.C('abcd') ** 0 * m.C('x');
+fce = pat->streammatch();
+for( i = 1, 1e3 ) {
+    ret = { fce("ab") };
+    checkeq(ret, { 1 });
+    ret = { fce("cd") };
+    checkeq(ret, { 1, "abcd" });
+}
+ret = { fce("x") };
+checkeq(ret, { 0, "x" });
+
+pat = (m.C('abcd') / "out") ** 0 * m.C('x');
+fce = pat->streammatch();
+for( i = 1, 1e3 ) {
+    ret = { fce("ab") };
+    checkeq(ret, { 1 });
+    ret = { fce("cd") };
+    checkeq(ret, { 1, "out" });
+}
+ret = { fce("x") };
+checkeq(ret, { 0, "x" });
+
+pat = (m.C('abcd') / "pattern1" + m.C('efgh') / "pattern2" + (m.P(1) - 'xyz')) ** 0 * (m.C("xyz") / "pattern3");
+fce = pat->streammatch();
+
+for( i = 1, 1e3 ) {
+    ret = { fce("ef") };
+    checkeq(ret, { 1 });
+    ret = { fce("gh") };
+    checkeq(ret, { 1, "pattern2" });
+    ret = { fce("a") };
+    checkeq(ret, { 1 });
+    ret = { fce("bcd") };
+    checkeq(ret, { 1, "pattern1" });
+}
+ret = { fce("xyz") };
+checkeq(ret, { 0, "pattern3" });
+
+pat = m.P('abcd') * -1;
+fce = pat->streammatch();
+ret = { fce("abc") };
+checkeq(ret, { 1 });
+ret = { fce("d") };
+checkeq(ret, { 1 });
+ret = { fce("", true) };
+checkeq(ret, { 0, 5 });
+
+var field = '"' * m.Cs(((m.P(1) - '"') + m.P('""') / '"') ** 0) * '"' +
+        m.C((1 - m.S(',\n"')) ** 0);
+
+var record = field * (',' * field) ** 0 * (m.P('\n') + -1);
+
+fce = record->streammatch();
+ret = { fce('ab') };
+checkeq(ret, { 1 });
+ret = { fce('c') };
+checkeq(ret, { 1 });
+ret = { fce(',"def",') };
+checkeq(ret, { 1, 'abc', 'def' });
+ret = { fce('x', true) };
+checkeq(ret, { 0, 'x' });
+
+record = re.compile([=[
+  record <- field (',' field)*  (%nl / !.)
+  field <- escaped / nonescaped
+  nonescaped <- { [^,"%nl]* }
+  escaped <- '"' {~ ([^"] / '""' -> '"')* ~} '"'
+]=]);
+
+fce = record->streammatch();
+ret = { fce("a") };
+checkeq(ret, { 1 });
+ret = { fce("bc,") };
+checkeq(ret, { 1, 'abc' });
+ret = { fce("def", true) };
+checkeq(ret, { 0, 'def' });
+
+var c = re.compile([=[
+  s <-  ({(!longstring .)+} / longstring)*
+  longstring <- '[' {:init: '='* :} '[' close
+  close <- ']' =init ']' / . close
+]=]);
+
+var teststring = 'data1[=[insidedata1]=]data2[==[====]==]data3[[]]';
+
+var output = { 'data1', 'data2', 'data3' };
+
+fce = c->streammatch();
+
+var index = 1;
+
+for( i = 1, #output ) {
+    var status, data;
+    do {
+        status, data = fce(teststring->sub(index, index), index == #teststring);
+        ++index    ;
+    } while(!( data || status != 1) );
+    checkeq(output[i], data);
+}
+
+pat = m.C('a') * m.Cg('b', 'backref1') * m.C('c') * m.Cg('d', 'backref2') * m.C('e') * m.Cg('f', 'backref3') *
+        m.Cb('backref1') * m.C('g') * m.Cb('backref2') * m.C('h') * m.Cb('backref3') * m.C('i');
+fce = pat->streammatch();
+
+ret = { fce("a") };
+checkeq(ret, { 1, 'a' });
+ret = { fce("b") };
+checkeq(ret, { 1 });
+ret = { fce("c") };
+checkeq(ret, { 1, "c" });
+ret = { fce("d") };
+checkeq(ret, { 1, });
+ret = { fce("e") };
+checkeq(ret, { 1, "e" });
+ret = { fce("f") };
+checkeq(ret, { 1, "b" });
+ret = { fce("g") };
+checkeq(ret, { 1, "g", "d" });
+ret = { fce("h") };
+checkeq(ret, { 1, "h", "f" });
+ret = { fce("i") };
+checkeq(ret, { 0, "i" });
+
+pat = m.C('a') * (m.Cg(1, 'backref') * m.C('x1') * m.Cb('backref') + m.Cg(1, 'backref') * m.C('x2') * m.Cb('backref'));
+fce = pat->streammatch();
+ret = { fce("a") };
+checkeq(ret, { 1, 'a' });
+ret = { fce("x") };
+checkeq(ret, { 1 });
+ret = { fce("x") };
+checkeq(ret, { 1 });
+ret = { fce("2") };
+checkeq(ret, { 0, 'x2', 'x' });
+
+
+pat = m.C('a') * m.Ct(m.Cg('b', 'index')) * m.C('c');
+fce = pat->streammatch();
+
+ret = { fce("a") };
+checkeq(ret, { 1, 'a' });
+ret = { fce("b") };
+checkeq(ret, { 1, { index = 'b' } });
+ret = { fce("c") };
+checkeq(ret, { 0, 'c' });
+
+print('OK');
+

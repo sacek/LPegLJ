@@ -1,3 +1,5 @@
+#This is a LjsJIT https://github.com/mingodad/ljsjit port
+
 LPegLJ v1.0
 =============
 

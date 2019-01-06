@@ -1,0 +1,1039 @@
+/*
+LPEGLJ
+lpvm.lua
+Virtual machine
+Copyright (C) 2014 Rostislav Sacek.
+based on LPeg v1.0 - PEG pattern matching for Lua
+Lua.org & PUC-Rio  written by Roberto Ierusalimschy
+http://www.inf.puc-rio.br/~roberto/lpeg/
+
+** Permission is hereby granted, free of charge, to any person obtaining
+** a copy of this software and associated documentation files (the
+** "Software"), to deal in the Software without restriction, including
+** without limitation the rights to use, copy, modify, merge, publish,
+** distribute, sublicense, and/or sell copies of the Software, and to
+** permit persons to whom the Software is furnished to do so, subject to
+** the following conditions:
+**
+** The above copyright notice and this permission notice shall be
+** included in all copies or substantial portions of the Software.
+**
+** THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+** EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+** MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+** IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+** CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+** TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+** SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+**
+** [ MIT license: http://www.opensource.org/licenses/mit-license.php ]
+--*/
+
+var ffi = require ("ffi");
+var lpcap = require ("lpcap");
+/* Only for debug purpose
+var lpprint = require("lpprint");
+--*/
+
+var band, rshift, lshift = bit.band, bit.rshift, bit.lshift;
+
+// {======================================================
+// Virtual Machine
+// =======================================================
+
+// Interpret the result of a dynamic capture: false -> fail;
+// true -> keep current position; number -> next position.
+// Return new subject position. 'fr' is stack index where
+// is the result; 'curr' is current subject position; 'limit'
+// is subject's size.
+var MAXBEHINDPREDICATE = 255; // max behind for Look-behind predicate
+var MAXOFF = 0xF; // maximum for full capture
+var MAXBEHIND = math.max(MAXBEHINDPREDICATE, MAXOFF); // maximum before current pos
+var INITBACK = 400; // default maximum size for call/backtrack stack
+
+var IAny = 0; // if no char, fail
+var IChar = 1; // if char != val, fail
+var ISet = 2; // if char not in val, fail
+var ITestAny = 3; // in no char, jump to 'offset'
+var ITestChar = 4; // if char != val, jump to 'offset'
+var ITestSet = 5; // if char not in val, jump to 'offset'
+var ISpan = 6; // read a span of chars in val
+var IBehind = 7; // walk back 'val' characters (fail if not possible)
+var IRet = 8; // return from a rule
+var IEnd = 9; // end of pattern
+var IChoice = 10; // stack a choice; next fail will jump to 'offset'
+var IJmp = 11; // jump to 'offset'
+var ICall = 12; // call rule at 'offset'
+var IOpenCall = 13; // call rule number 'offset' (must be closed to a ICall)
+var ICommit = 14; // pop choice and jump to 'offset'
+var IPartialCommit = 15; // update top choice to current position and jump
+var IBackCommit = 16; // "fails" but jump to its own 'offset'
+var IFailTwice = 17; // pop one choice and then fail
+var IFail = 18; // go back to saved state on choice and jump to saved offset
+var IGiveup = 19; // internal use
+var IFullCapture = 20; // complete capture of last 'off' chars
+var IOpenCapture = 21; // start a capture
+var ICloseCapture = 22;
+var ICloseRunTime = 23;
+
+var Cclose = 0;
+var Cposition = 1;
+var Cconst = 2;
+var Cbackref = 3;
+var Carg = 4;
+var Csimple = 5;
+var Ctable = 6;
+var Cfunction = 7;
+var Cquery = 8;
+var Cstring = 9;
+var Cnum = 10;
+var Csubst = 11;
+var Cfold = 12;
+var Cruntime = 13;
+var Cgroup = 14;
+
+var BCapcandelete = 0x30000;
+var maxstack = INITBACK;
+var maxcapturedefault = 100;
+var maxmemo = 1000;
+var usememoization = false;
+var trace = false;
+
+var FAIL = -1;
+var LRFAIL = -1;
+var VOID = -2;
+var CHOICE = -3;
+var CALL = -4;
+
+ffi.cdef ([=[
+typedef struct {
+          int code;
+          int val;
+          int offset;
+          int aux;
+         } PATTERN_ELEMENT;
+typedef struct {
+          int allocsize;
+          int size;
+          PATTERN_ELEMENT *p;
+         } PATTERN;
+typedef struct {
+          int tag;
+          int val;
+          int ps;
+          int cap;
+         } TREEPATTERN_ELEMENT;
+typedef struct {
+          int id;
+          int treesize;
+          PATTERN *code;
+          TREEPATTERN_ELEMENT p[?];
+         } TREEPATTERN;
+
+typedef struct {
+          double s;
+          double X;
+          double memos;
+          int p;
+          int caplevel;
+          int pA;
+          int valuetabletop;
+         } STACK;
+
+typedef struct {
+          double s;
+          int siz;
+          int idx;
+          int kind;
+          int candelete;
+         } CAPTURE;
+
+void *malloc( size_t size );
+void free( void *memblock );
+void *realloc( void *memblock, size_t size );
+]=]);
+
+var treepatternelement = ffi.typeof('TREEPATTERN_ELEMENT');
+var treepattern = ffi.typeof('TREEPATTERN');
+var patternelement = ffi.typeof('PATTERN_ELEMENT');
+var pattern = ffi.typeof('PATTERN');
+var settype = ffi.typeof('int32_t[8]');
+
+var function resdyncaptures(fr, curr, limit, checkstreamlen) {
+    var typ = type(fr);
+    // false value?
+    if( ! fr ) {
+        return FAIL; // and fail
+    } else if( typ == 'boolean' ) {
+        // true?
+        return curr; // keep current position
+    } else {
+        var res = fr; // new position
+        if( res < curr || (limit && res > limit) || (! limit && checkstreamlen && ! checkstreamlen(res - 2)) ) {
+            error("invalid position returned by match-time capture", 0);
+        }
+        return res;
+    }
+    assert(false);
+}
+
+
+// Add capture values returned by a dynamic capture to the capture list
+// 'base', nested inside a group capture. 'fd' indexes the first capture
+// value, 'n' is the number of values (at least 1).
+
+var function adddyncaptures(s, base, index, n, fd, valuetable) {
+    // Cgroup capture is already there
+    assert(base[index].kind == Cgroup && base[index].siz == 0);
+    base[index].idx = 0; // make it an anonymous group
+    base[index + 1] = {};
+    // add runtime captures
+    for( i = 1, n ) {
+        base[index + i].kind = Cruntime;
+        base[index + i].siz = 1; // mark it as closed
+        var ind = #valuetable + 1;
+        valuetable[ind] = fd[i + 1];
+        base[index + i].idx = ind; // stack index of capture value
+        base[index + i].s = s;
+        base[index + i + 1] = {};
+    }
+    base[index + n + 1].kind = Cclose; // close group
+    base[index + n + 1].siz = 1;
+    base[index + n + 1].s = s;
+    base[index + n + 2] = {};
+}
+
+
+// Opcode interpreter
+
+var function match(stream, last, o, s, op, valuetable, ...) {
+    var arg = { ... };
+    var argcount = select('#', ...);
+    var len = #o;
+    var ptr = ffi.cast('const unsigned char*', o);
+    --s    ;
+    var stackptr = 0; // point to first empty slot in stack
+    var captop = 0; // point to first empty slot in captures
+    var STACK = ffi.new("STACK[?]", INITBACK);
+    var CAPTURE = ffi.new("CAPTURE[?]", maxcapturedefault);
+    var CAPTURESTACK = { { capture = CAPTURE, captop = captop, maxcapture = maxcapturedefault } };
+    var capturestackptr = #CAPTURESTACK;
+    var maxcapture = maxcapturedefault;
+    var stacklimit = INITBACK;
+    var L = {};
+    var Memo1, Memo2 = {}, {};
+    var memoind = 0;
+    var maxpointer = 2 ** math.ceil(math.log(op.size) / math.log(2));
+    var nocapturereleased = true;
+
+    var p = 0; // current instruction
+    var streambufsize = 2 ** 8;
+    var streambufsizemask = streambufsize - 1; // faster modulo
+    var streambufs = {};
+    var streambufoffset = 0;
+    var streamstartbuffer = 0;
+    var streambufferscount = 0;
+    var level = -1;
+
+    var function deletestreambuffers() {
+        var min = s;
+        for( i = stackptr - 1, 0, -1 ) {
+            var val = STACK[i].s;
+            if( val >= 0 ) {
+                min = math.min(val, min);
+            }
+        }
+
+        for( i = captop - 1, 0, -1 ) {
+            var val = CAPTURE[i].s;
+            if( val >= 0 ) {
+                min = math.min(val, min);
+            }
+        }
+        for( i = streamstartbuffer + 1, streambufoffset - streambufsize, streambufsize ) {
+            // max behind for full capture and max behind for Look-behind predicate
+            if( i + streambufsize + MAXBEHIND < min ) {
+                streambufs[i] = null;
+                --streambufferscount    ;
+            } else {
+                streamstartbuffer = i - 1;
+                break;
+            }
+        }
+    }
+
+    var function addstreamdata(s, last) {
+        var len = #s;
+        var srcoffset = 0;
+        if( streambufferscount > 128 ) {
+            deletestreambuffers();
+        }
+        do {
+            var offset = bit.band(streambufoffset, streambufsizemask);
+            if( offset > 0 ) {
+                var index = streambufoffset - offset + 1;
+                var count = math.min(len, streambufsize - offset);
+                ffi.copy(streambufs[index] + offset, s->sub(srcoffset + 1, srcoffset + 1 + count), count);
+                len -=   count;
+                srcoffset +=   count;
+                streambufoffset +=   count;
+            }
+            if( len > 0 ) {
+                var index = streambufoffset - (bit.band(streambufoffset, streambufsizemask)) + 1;
+                var buf = ffi.new('unsigned char[?]', streambufsize);
+                ++streambufferscount    ;
+                streambufs[index] = buf;
+                var count = math.min(len, streambufsize);
+                ffi.copy(buf, s->sub(srcoffset + 1, srcoffset + 1 + count), count);
+                len -=   count;
+                srcoffset +=   count;
+                streambufoffset +=   count;
+            }
+            if( streambufoffset >= 2 ** 47 ) {
+                error("too big input stream", 0);
+            }
+        } while(!( len == 0) );
+    }
+
+    var function getstreamchar(s) {
+        var offset = bit.band(s, streambufsizemask);
+        var index = s - offset + 1;
+        return streambufs[index][offset];
+    }
+
+    var checkstreamlen;
+
+    var function getstreamstring(st, en) {
+        // TODO Optimalize access
+        var str = {};
+        var i = st >= 0 && st || 1;
+        var to = en >= 0 && en || math.huge;
+        while( true ) {
+            if( i > to ) { break; }
+            if( ! checkstreamlen(i - 1) ) { return; }
+            if( last && (st < 0 || en < 0) ) {
+                for( j = i, streambufoffset ) {
+                    str[#str + 1] = string.char(getstreamchar(j - 1));
+                }
+                en = en < 0 && streambufoffset + en + 1 || en;
+                en = st > 0 && en - st + 1 || en;
+                st = st < 0 && streambufoffset + st + 1 || 1;
+                return table.concat(str)->sub(st, en);
+            } else {
+                str[#str + 1] = string.char(getstreamchar(i - 1));
+                ++i    ;
+            }
+        }
+        return table.concat(str);
+    }
+
+    function checkstreamlen(index) {
+        var str;
+        while( true ) {
+            if( index < streambufoffset ) {
+                return true;
+            } else {
+                if( last ) {
+                    s = streambufoffset;
+                    return false;
+                }
+                var max = captop;
+                for( i = stackptr - 1, 0, -1 ) {
+                    var val = STACK[i].X == CHOICE && STACK[i].caplevel || -1;
+                    if( val >= 0 ) {
+                        max = math.min(val, max);
+                    }
+                }
+                var n, out, outindex = lpcap.getcapturesruntime(CAPTURE, null, getstreamstring, false, 0, max, captop, valuetable, unpack(arg, 1, argcount));
+                if( n > 0 ) {
+                    for( i = stackptr - 1, 0, -1 ) {
+                        var val = STACK[i].caplevel;
+                        if( val > 0 ) {
+                            STACK[i].caplevel = STACK[i].caplevel - n;
+                        }
+                    }
+                    captop -=   n;
+                }
+                if( outindex > 0 ) {
+                    nocapturereleased = false;
+                }
+                str, last = coroutine.yield(1, unpack(out, 1, outindex));
+                addstreamdata(str);
+            }
+        }
+    }
+
+    var function doublecapture() {
+        maxcapture *=   2;
+        var NEWCAPTURE = ffi.new("CAPTURE[?]", maxcapture);
+        ffi.copy(NEWCAPTURE, CAPTURE, ffi.sizeof('CAPTURE') * captop);
+        CAPTURE = NEWCAPTURE;
+        CAPTURESTACK[capturestackptr].capture = CAPTURE;
+        CAPTURESTACK[capturestackptr].maxcapture = maxcapture;
+    }
+
+    var function pushcapture() {
+        CAPTURE[captop].idx = op.p[p].offset;
+        CAPTURE[captop].kind = band(op.p[p].val, 0x0f);
+        CAPTURE[captop].candelete = band(op.p[p].val, BCapcandelete) != 0 && 1 || 0;
+        ++captop    ;
+        ++p    ;
+        if( captop >= maxcapture ) {
+            doublecapture();
+        }
+    }
+
+    var function traceenter(typ, par) {
+        level = level + (par || 0);
+        io.write(('%s+%s %s\n')->format((' ')->rep(level), typ, valuetable[op.p[p].aux]));
+    }
+
+    var function traceleave(inst) {
+        io.write(('%s- %s\n')->format((' ')->rep(level), valuetable[op.p[inst].aux]));
+        --level    ;
+    }
+
+    var function tracematch(typ, start, par, from, to, inst, extra, ...) {
+        var n, caps, capscount = lpcap.getcapturesruntime(CAPTURE, o, getstreamstring, true, start, captop, captop, valuetable, ...);
+        var capstr = {};
+        for( i = 1, capscount ) { capstr[i] = tostring(caps[i]); }
+        extra = extra && '(' .. extra .. ')' || '';
+        io.write(('%s=%s %s%s %s %s \n')->format((' ')->rep(level), typ, valuetable[op.p[inst].aux], extra,
+            o && o->sub(from, to) || getstreamstring(from, to), table.concat(capstr, " ")));
+        level -=   par;
+    }
+
+    var function fail() {
+        // pattern failed: try to backtrack
+        var X;
+        do { // remove pending calls
+            --stackptr    ;
+            if( stackptr == -1 ) {
+                p = FAIL;
+                return;
+            }
+            s = STACK[stackptr].s;
+            X = STACK[stackptr].X;
+            if( usememoization && X == CALL && STACK[stackptr].memos != VOID ) {
+                Memo1[STACK[stackptr].pA + STACK[stackptr].memos * maxpointer] = FAIL;
+                Memo2[STACK[stackptr].pA + STACK[stackptr].memos * maxpointer] = FAIL;
+            }
+            // lvar.2 rest
+            if( X == LRFAIL ) {
+                CAPTURESTACK[capturestackptr] = null;
+                --capturestackptr    ;
+                CAPTURE = CAPTURESTACK[capturestackptr].capture;
+                maxcapture = CAPTURESTACK[capturestackptr].maxcapture;
+                L[STACK[stackptr].pA + s * maxpointer] = null;
+            }
+            if( trace && (X == CALL || X == LRFAIL) ) { traceleave(STACK[stackptr].p - 1); }
+        } while(!( X == CHOICE || X >= 0) );
+        p = STACK[stackptr].p;
+        for( i = #valuetable, STACK[stackptr].valuetabletop + 1, -1 ) {
+            table.remove(valuetable);
+        }
+        // inc.2
+        if( X >= 0 ) {
+            s = X;
+            --capturestackptr    ;
+            CAPTURE = CAPTURESTACK[capturestackptr].capture;
+            captop = CAPTURESTACK[capturestackptr].captop;
+            maxcapture = CAPTURESTACK[capturestackptr].maxcapture;
+            var capture = L[STACK[stackptr].pA + STACK[stackptr].s * maxpointer].capturecommit;
+            while( captop + capture.captop >= maxcapture ) {
+                doublecapture();
+            }
+            ffi.copy(CAPTURE + captop, capture.capture, capture.captop * ffi.sizeof('CAPTURE'));
+            captop = captop + capture.captop;
+            if( trace ) { tracematch('', captop - capture.captop, 1, STACK[stackptr].s + 1, s, STACK[stackptr].p - 1, L[STACK[stackptr].pA + STACK[stackptr].s * maxpointer].level, unpack(arg, 1, argcount)); }
+            CAPTURESTACK[capturestackptr + 1] = null;
+            L[STACK[stackptr].pA + STACK[stackptr].s * maxpointer] = null;
+        } else {
+            captop = STACK[stackptr].caplevel;
+        }
+    }
+
+    var function doublestack() {
+        if( stackptr >= maxstack ) {
+            error(("backtrack stack overflow (current limit is %d)")->format(maxstack), 0);
+        }
+        stacklimit *=   2;
+        stacklimit = (stacklimit > maxstack) && maxstack || stacklimit;
+        var NEWSTACK = ffi.new("STACK[?]", stacklimit);
+        ffi.copy(NEWSTACK, STACK, ffi.sizeof('STACK') * stackptr);
+        STACK = NEWSTACK;
+    }
+
+
+    if( stream ) {
+        addstreamdata(o);
+        len = null;
+        o = null;
+        ptr = null;
+    }
+    while( true ) {
+        /* Only for debug
+        io.write(("s: |%s| stck:%d, caps:%d  \n"):format(s + 1, stackptr, captop))
+        if p ~= FAIL then
+            lpprint.printinst(op.p, p, valuetable)
+            lpprint.printcaplist(CAPTURE, captop, valuetable)
+        end
+        --*/
+        if( p == FAIL ) { return -1; }
+        var code = op.p[p].code;
+        if( code == IEnd ) {
+            CAPTURE[captop].kind = Cclose;
+            CAPTURE[captop].s = -1;
+            return 0, lpcap.getcaptures(CAPTURE, o, getstreamstring, nocapturereleased && s + 1, valuetable, ...);
+        } else if( code == IRet ) {
+            if( STACK[stackptr - 1].X == CALL ) {
+                --stackptr    ;
+                if( trace ) { tracematch('', STACK[stackptr].caplevel, 1, STACK[stackptr].s + 1, s, STACK[stackptr].p - 1, null, ...); }
+                p = STACK[stackptr].p;
+                if( usememoization && STACK[stackptr].memos != VOID ) {
+                    var dif = captop - STACK[stackptr].caplevel;
+                    var caps;
+                    if( dif > 0 ) {
+                        caps = ffi.new("CAPTURE[?]", dif);
+                        ffi.copy(caps, CAPTURE + captop - dif, dif * ffi.sizeof('CAPTURE'));
+                    }
+                    var val = { s, dif, caps };
+                    Memo1[STACK[stackptr].pA + STACK[stackptr].memos * maxpointer] = val;
+                    Memo2[STACK[stackptr].pA + STACK[stackptr].memos * maxpointer] = val;
+                }
+            } else {
+                var X = STACK[stackptr - 1].X;
+                // lvar.1 inc.1
+                if( X == LRFAIL || s > X ) {
+                    if( trace ) { tracematch('IB', 0, 0, STACK[stackptr - 1].s + 1, s, STACK[stackptr - 1].p - 1, L[STACK[stackptr - 1].pA + STACK[stackptr - 1].s * maxpointer].level + 1, ...); }
+                    STACK[stackptr - 1].X = s;
+                    p = STACK[stackptr - 1].pA;
+                    s = STACK[stackptr - 1].s;
+                    var lambda = L[p + s * maxpointer];
+                    lambda.level = lambda.level + 1;
+                    lambda.X = STACK[stackptr - 1].X;
+                    STACK[stackptr - 1].caplevel = captop;
+                    STACK[stackptr - 1].valuetabletop = #valuetable;
+                    CAPTURESTACK[capturestackptr].captop = captop;
+                    lambda.capturecommit = CAPTURESTACK[capturestackptr];
+                    captop = 0;
+                    CAPTURE = ffi.new("CAPTURE[?]", maxcapturedefault);
+                    CAPTURESTACK[capturestackptr] = { capture = CAPTURE, captop = captop, maxcapture = maxcapturedefault };
+                    maxcapture = maxcapturedefault;
+                } else {
+                    // inc.3
+                    --stackptr    ;
+                    p = STACK[stackptr].p;
+                    s = STACK[stackptr].X;
+                    for( i = #valuetable, STACK[stackptr].valuetabletop + 1, -1 ) {
+                        table.remove(valuetable);
+                    }
+                    var lambda = L[STACK[stackptr].pA + STACK[stackptr].s * maxpointer];
+                    --capturestackptr    ;
+                    CAPTURE = CAPTURESTACK[capturestackptr].capture;
+                    captop = CAPTURESTACK[capturestackptr].captop;
+                    maxcapture = CAPTURESTACK[capturestackptr].maxcapture;
+                    var capture = lambda.capturecommit;
+                    while( captop + capture.captop >= maxcapture ) {
+                        doublecapture();
+                    }
+                    ffi.copy(CAPTURE + captop, capture.capture, capture.captop * ffi.sizeof('CAPTURE'));
+                    captop = captop + capture.captop;
+                    if( trace ) { tracematch('', captop - capture.captop, 1, STACK[stackptr].s + 1, s, STACK[stackptr].p - 1, L[STACK[stackptr].pA + STACK[stackptr].s * maxpointer].level, ...); }
+                    CAPTURESTACK[capturestackptr + 1] = null;
+                    L[STACK[stackptr].pA + STACK[stackptr].s * maxpointer] = null;
+                }
+            }
+        } else if( code == IBehind ) {
+            var n = op.p[p].val;
+            if( n > s ) {
+                fail();
+            } else {
+                s -=   n;
+                ++p    ;
+            }
+        } else if( code == IJmp ) {
+            if( trace && op.p[p].aux != 0 ) { traceenter('TC'); }
+            p = p + op.p[p].offset;
+        } else if( code == IChoice ) {
+            if( stackptr == stacklimit ) {
+                doublestack();
+            }
+            STACK[stackptr].X = CHOICE;
+            STACK[stackptr].p = p + op.p[p].offset;
+            STACK[stackptr].s = s;
+            STACK[stackptr].caplevel = captop;
+            STACK[stackptr].valuetabletop = #valuetable;
+            ++stackptr    ;
+            ++p    ;
+        } else if( code == ICall ) {
+            if( stackptr == stacklimit ) {
+                doublestack();
+            }
+            var k = bit.band(op.p[p].val, 0xffff);
+            if( k == 0 ) {
+                var pA = p + op.p[p].offset;
+                var memo = Memo1[pA + s * maxpointer];
+                if( usememoization && memo ) {
+                    if( trace ) { traceenter('M', 1); }
+                    if( memo == FAIL ) {
+                        if( trace ) { traceleave(p); }
+                        fail();
+                    } else {
+                        var dif = memo[2];
+                        if( dif > 0 ) {
+                            while( captop + dif >= maxcapture ) {
+                                doublecapture();
+                            }
+                            var caps = memo[3];
+                            ffi.copy(CAPTURE + captop, caps, dif * ffi.sizeof('CAPTURE'));
+                            captop +=   dif;
+                        }
+                        if( trace ) { tracematch('M', captop - dif, 1, s + 1, memo[1], p, null, ...); }
+                        s = memo[1];
+                        ++p    ;
+                    }
+                } else {
+                    if( trace ) { traceenter('', 1); }
+                    STACK[stackptr].X = CALL;
+                    STACK[stackptr].s = s;
+                    STACK[stackptr].p = p + 1; // save return address
+                    STACK[stackptr].pA = pA;
+                    STACK[stackptr].memos = s;
+                    STACK[stackptr].caplevel = captop;
+                    ++stackptr    ;
+                    p = pA;
+                    if( usememoization && ! memo ) {
+                        ++memoind    ;
+                        if( memoind > maxmemo ) {
+                            memoind = 0;
+                            Memo1 = Memo2;
+                            Memo2 = {};
+                        }
+                    }
+                }
+            } else {
+                var pA = p + op.p[p].offset;
+                var X = L[pA + s * maxpointer];
+                // lvar.1 lvar.2
+                if( ! X ) {
+                    if( trace ) { traceenter('', 1); }
+                    CAPTURESTACK[capturestackptr].captop = captop;
+                    var capture = ffi.new("CAPTURE[?]", maxcapturedefault);
+                    ++capturestackptr    ;
+                    CAPTURESTACK[capturestackptr] = { capture = capture, captop = captop, maxcapture = maxcapturedefault };
+                    CAPTURE = capture;
+                    maxcapture = maxcapturedefault;
+                    captop = 0;
+                    L[pA + s * maxpointer] = { X = LRFAIL, k = k, cs = capturestackptr, level = 0 };
+                    STACK[stackptr].p = p + 1;
+                    STACK[stackptr].pA = pA;
+                    STACK[stackptr].s = s;
+                    STACK[stackptr].X = LRFAIL;
+                    ++stackptr    ;
+                    p = pA;
+                } else if( X.X == LRFAIL || k < X.k ) {
+                    // lvar.3 lvar.5
+                    fail();
+                } else {
+                    // lvar.4
+                    var capture = X.capturecommit;
+                    while( captop + capture.captop >= maxcapture ) {
+                        doublecapture();
+                    }
+                    ffi.copy(CAPTURE + captop, capture.capture, capture.captop * ffi.sizeof('CAPTURE'));
+                    captop +=   capture.captop;
+                    ++p;
+                    s = X.X;
+                }
+            }
+        } else if( code == ICommit ) {
+            --stackptr;
+            p +=   op.p[p].offset;
+        } else if( code == IPartialCommit ) {
+            STACK[stackptr - 1].s = s;
+            STACK[stackptr - 1].caplevel = captop;
+            STACK[stackptr - 1].valuetabletop = #valuetable;
+            p +=   op.p[p].offset;
+        } else if( code == IBackCommit ) {
+            --stackptr    ;
+            s = STACK[stackptr].s;
+            captop = STACK[stackptr].caplevel;
+            for( i = #valuetable, STACK[stackptr].valuetabletop + 1, -1 ) {
+                table.remove(valuetable);
+            }
+            p +=   op.p[p].offset;
+        } else if( code == IFailTwice ) {
+            --stackptr    ;
+            fail();
+        } else if( code == IFail ) {
+            fail();
+        } else if( code == ICloseRunTime ) {
+            // invalidate memo
+            for( i = 0, stackptr - 1 ) {
+                STACK[i].memos = VOID;
+            }
+            var cs = {};
+            cs.s = o;
+            cs.stream = getstreamstring;
+            cs.ocap = CAPTURE;
+            cs.ptop = arg;
+            cs.ptopcount = argcount;
+            var out = { outindex = 0, out = {} };
+            var n = lpcap.runtimecap(cs, captop, s + 1, out, valuetable); // call function
+            captop -=   n;
+            var res = resdyncaptures(out.out[1], s + 1, len && len + 1, checkstreamlen); // get result
+            // fail?
+            if( res == FAIL ) {
+                fail();
+            } else {
+                s = res - 1; // else update current position
+                n = out.outindex - 1; // number of new captures
+                // any new capture?
+                if( n > 0 ) {
+                    ++captop    ;
+                    while( captop + n + 1 >= maxcapture ) {
+                        doublecapture();
+                    }
+                    captop = captop + n + 1;
+                    // add new captures to 'capture' list
+                    adddyncaptures(s + 1, CAPTURE, captop - n - 2, n, out.out, valuetable);
+                }
+                ++p    ;
+            }
+        } else if( code == ICloseCapture ) {
+            var s1 = s + 1;
+            assert(captop > 0);
+            // if possible, turn capture into a full capture
+            if( CAPTURE[captop - 1].siz == 0 &&
+                    s1 - CAPTURE[captop - 1].s < 255 ) {
+                CAPTURE[captop - 1].siz = s1 - CAPTURE[captop - 1].s + 1;
+                ++p    ;
+            } else {
+                CAPTURE[captop].siz = 1;
+                CAPTURE[captop].s = s + 1;
+                pushcapture();
+            }
+        } else if( code == IOpenCapture ) {
+            CAPTURE[captop].siz = 0;
+            CAPTURE[captop].s = s + 1;
+            pushcapture();
+        } else if( code == IFullCapture ) {
+            CAPTURE[captop].siz = band(rshift(op.p[p].val, 4), 0x0F) + 1; // save capture size
+            CAPTURE[captop].s = s + 1 - band(rshift(op.p[p].val, 4), 0x0F);
+            pushcapture();
+            // standard mode
+        } else if( o ) {
+            if( code == IAny ) {
+                if( s < len ) {
+                    ++p    ;
+                    ++s    ;
+                } else {
+                    fail();
+                }
+            } else if( code == ITestAny ) {
+                if( s < len ) {
+                    ++p    ;
+                } else {
+                    p = p + op.p[p].offset;
+                }
+            } else if( code == IChar ) {
+                if( s < len && ptr[s] == op.p[p].val ) {
+                    ++p    ;
+                    ++s    ;
+                } else {
+                    fail();
+                }
+            } else if( code == ITestChar ) {
+                if( s < len && ptr[s] == op.p[p].val ) {
+                    ++p    ;
+                } else {
+                    p = p + op.p[p].offset;
+                }
+            } else if( code == ISet ) {
+                var c = ptr[s];
+                var set = valuetable[op.p[p].val];
+                if( s < len && band(set[rshift(c, 5)], lshift(1, band(c, 31))) != 0 ) {
+                    ++p    ;
+                    ++s    ;
+                } else {
+                    fail();
+                }
+            } else if( code == ITestSet ) {
+                var c = ptr[s];
+                var set = valuetable[op.p[p].val];
+                if( s < len && band(set[rshift(c, 5)], lshift(1, band(c, 31))) != 0 ) {
+                    ++p    ;
+                } else {
+                    p = p + op.p[p].offset;
+                }
+            } else if( code == ISpan ) {
+                while( s < len ) {
+                    var c = ptr[s];
+                    var set = valuetable[op.p[p].val];
+                    if( band(set[rshift(c, 5)], lshift(1, band(c, 31))) == 0 ) {
+                        break;
+                    }
+                    ++s    ;
+                }
+                ++p    ;
+            }
+        } else {
+            // stream mode
+            if( code == IAny ) {
+                if( checkstreamlen(s) ) {
+                    ++p    ;
+                    ++s    ;
+                } else {
+                    fail();
+                }
+            } else if( code == ITestAny ) {
+                if( checkstreamlen(s) ) {
+                    ++p    ;
+                } else {
+                    p = p + op.p[p].offset;
+                }
+            } else if( code == IChar ) {
+                if( checkstreamlen(s) && getstreamchar(s) == op.p[p].val ) {
+                    ++p    ;
+                    ++s    ;
+                } else {
+                    fail();
+                }
+            } else if( code == ITestChar ) {
+                if( checkstreamlen(s) && getstreamchar(s) == op.p[p].val ) {
+                    ++p    ;
+                } else {
+                    p = p + op.p[p].offset;
+                }
+            } else if( code == ISet ) {
+                var c = checkstreamlen(s) && getstreamchar(s);
+                var set = valuetable[op.p[p].val];
+                if( c && band(set[rshift(c, 5)], lshift(1, band(c, 31))) != 0 ) {
+                    ++p    ;
+                    ++s    ;
+                } else {
+                    fail();
+                }
+            } else if( code == ITestSet ) {
+                var c = checkstreamlen(s) && getstreamchar(s);
+                var set = valuetable[op.p[p].val];
+                if( c && band(set[rshift(c, 5)], lshift(1, band(c, 31))) != 0 ) {
+                    ++p    ;
+                } else {
+                    p = p + op.p[p].offset;
+                }
+            } else if( code == ISpan ) {
+                while( checkstreamlen(s) ) {
+                    var c = getstreamchar(s);
+                    var set = valuetable[op.p[p].val];
+                    if( band(set[rshift(c, 5)], lshift(1, band(c, 31))) == 0 ) {
+                        break;
+                    }
+                    ++s    ;
+                }
+                ++p    ;
+            }
+        }
+    }
+}
+
+var function setmax(val) {
+    maxstack = val;
+    if( maxstack < INITBACK ) {
+        maxstack = INITBACK;
+    }
+}
+
+var function setmaxbehind(val) {
+    MAXBEHIND = math.max(MAXBEHINDPREDICATE, MAXOFF, val || 0);
+}
+
+var function enablememoization(val) {
+    usememoization = val;
+}
+var function enabletracing(val) {
+    trace = val;
+}
+
+// Get the initial position for the match, interpreting negative
+// values from the end of the subject
+
+var function initposition(len, pos) {
+    var ii = pos || 1;
+    // positive index?
+    if( (ii > 0) ) {
+        // inside the string?
+        if( ii <= len ) {
+            return ii - 1; // return it (corrected to 0-base)
+        } else {
+            return len; // crop at the end
+        }
+    } else {
+        // negative index
+        // inside the string?
+        if( -ii <= len ) {
+            return len + ii; // return position from the end
+        } else {
+            return 0; // crop at the beginning
+        }
+    }
+}
+
+var function lp_match(pat, s, init, valuetable, ...) {
+    var i = initposition(s->len(), init) + 1;
+    return select(2, match(false, true, s, i, pat.code, valuetable, ...));
+}
+
+var function lp_streammatch(pat, init, valuetable, ...) {
+    var params = { ... };
+    var paramslength = select('#', ...);
+    var fce = coroutine.wrap(function(s, last) {
+        return match(true, last, s, init || 1, pat.code, valuetable, unpack(params, 1, paramslength));
+    });
+    return fce;
+}
+
+var function retcount(...) {
+    return select('#', ...), { ... };
+}
+
+// Only for testing purpose
+// stream emulation (send all chars from string one char after char)
+var function lp_emulatestreammatch(pat, s, init, valuetable, ...) {
+    init = initposition(s->len(), init) + 1;
+    var fce = lp_streammatch(pat, init, valuetable, ...);
+    var ret, count = {}, 0;
+    for( j = 1, #s ) {
+        var pcount, pret = retcount(fce(s->sub(j, j), j == #s)); // one char
+        if( pret[1] == -1 ) {
+            return; // fail
+        } else if( pret[1] == 0 ) {
+            // parsing finished
+            // collect result
+            for( i = 2, pcount ) {
+                ret[count + i - 1] = pret[i];
+            }
+            count = count + pcount - 1;
+            return unpack(ret, 1, count);
+        }
+        for( i = 2, pcount ) {
+            ret[count + i - 1] = pret[i];
+        }
+        count = count + pcount - 1;
+    }
+    return select(2, fce(s, true)); // empty string
+}
+
+var function lp_load(str, fcetab, usemeta) {
+    var index = 0;
+    assert(str);
+    var ptr = ffi.cast('const char*', str);
+    var patsize = ffi.cast('uint32_t*', ptr + index)[0];
+    index +=   4;
+    var len = ffi.sizeof(treepatternelement) * patsize;
+
+    var pat;
+    if( usemeta ) {
+        pat = treepattern(patsize);
+    } else {
+        pat = ffi.gc(ffi.cast('TREEPATTERN*', ffi.C.malloc(ffi.sizeof(treepattern, patsize))),
+            function(ct) {
+                if( ct.code != null ) {
+                    ffi.C.free(ct.code.p);
+                    ffi.C.free(ct.code);
+                }
+                ffi.C.free(ct);
+            });
+        ffi.fill(pat, ffi.sizeof(treepattern, patsize));
+        pat.treesize = patsize;
+        pat.id = 0;
+    }
+    ffi.copy(pat.p, ptr + index, len);
+    index +=   len;
+    if( usemeta ) {
+        pat.code = pattern();
+    } else {
+        pat.code = ffi.cast('PATTERN*', ffi.C.malloc(ffi.sizeof(pattern)));
+        assert(pat.code != null);
+        pat.code.allocsize = 10;
+        pat.code.size = 0;
+        pat.code.p = ffi.C.malloc(ffi.sizeof(patternelement) * pat.code.allocsize);
+        assert(pat.code.p != null);
+        ffi.fill(pat.code.p, ffi.sizeof(patternelement) * pat.code.allocsize);
+    }
+    pat.code.size = ffi.cast('uint32_t*', ptr + index)[0];
+    index +=   4;
+    len = pat.code.size * ffi.sizeof(patternelement);
+    var data = ffi.string(ptr + index, len);
+    index +=   len;
+    var count = ffi.cast('uint32_t*', ptr + index)[0];
+    index +=   4;
+    var valuetable = {};
+    for( i = 1, count ) {
+        var tag = ffi.string(ptr + index, 3);
+        index = index + 3;
+        //string
+        if( tag == 'str' ) {
+            len = ffi.cast('uint32_t*', ptr + index)[0];
+            index +=   4;
+            var val = ffi.string(ptr + index, len);
+            index +=   len;
+            valuetable[#valuetable + 1] = val;
+        } else if( tag == 'num' ) {
+            //number
+            len = ffi.cast('uint32_t*', ptr + index)[0];
+            index +=   4;
+            var val = ffi.string(ptr + index, len);
+            index +=   len;
+            valuetable[#valuetable + 1] = tonumber(val);
+        } else if( tag == 'cdt' ) {
+            //ctype
+            var val = settype();
+            ffi.copy(val, ptr + index, ffi.sizeof(settype));
+            index = index + ffi.sizeof(settype);
+            valuetable[#valuetable + 1] = val;
+        } else if( tag == 'fnc' ) {
+            //function
+            len = ffi.cast('uint32_t*', ptr + index)[0];
+            index +=   4;
+            var fname = ffi.string(ptr + index, len);
+            index +=   len;
+            len = ffi.cast('uint32_t*', ptr + index)[0];
+            index +=   4;
+            var val = ffi.string(ptr + index, len);
+            index +=   len;
+            if( fcetab && fcetab[fname] ) {
+                assert(type(fcetab[fname]) == 'function', ('"%s" is not function')->format(fname));
+                valuetable[#valuetable + 1] = fcetab[fname];
+            } else {
+                valuetable[#valuetable + 1] = loadstring(val);
+            }
+        }
+    }
+    pat.code.allocsize = pat.code.size;
+    pat.code.p = ffi.C.realloc(pat.code.p, ffi.sizeof(patternelement) * pat.code.allocsize);
+    assert(pat.code.p != null);
+    ffi.copy(pat.code.p, data, ffi.sizeof(patternelement) * pat.code.allocsize);
+    return pat, valuetable;
+}
+
+var function lp_loadfile(fname, fcetab, usemeta) {
+    var file = assert(io.open(fname, 'rb'));
+    var pat, valuetable = lp_load(assert(file->read("*a")), fcetab, usemeta);
+    file->close();
+    return pat, valuetable;
+}
+// ======================================================
+
+return {
+    match = lp_match,
+    streammatch = lp_streammatch,
+    emulatestreammatch = lp_emulatestreammatch,
+    load = lp_load,
+    loadfile = lp_loadfile,
+    setmax = setmax,
+    setmaxbehind = setmaxbehind,
+    enablememoization = enablememoization,
+    enabletracing = enabletracing
+};
