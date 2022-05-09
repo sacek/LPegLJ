@@ -250,7 +250,7 @@ local function hascaptures(tree, index)
         elseif ns == 2 then
             if hascaptures(tree, index + 1) then
                 return true
-            else
+            elseif tree.p[index].tag ~= TRule then
                 return hascaptures(tree, index + tree.p[index].ps)
             end
         else
