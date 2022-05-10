@@ -1,0 +1,287 @@
+// $Id: re.lua,v 1.44 2013/03/26 20:11:40 roberto Exp $
+// 2014/08/15 changes rostislav
+
+// imported functions and modules
+var tonumber, print, error = tonumber, print, error;
+var setmetatable = setmetatable;
+var m = require("lpeglj");
+
+// 'm' will be used to parse expressions, and 'mm' will be used to
+// create expressions; that is, 're' runs on 'm', creating patterns
+// on 'mm'
+var mm = m;
+
+// pattern's metatable
+var mt = getmetatable(mm.P(0));
+mt = m.version() == "1.0.0.0LJ" && m || mt;
+
+
+
+// No more global accesses after this point
+var version = _VERSION;
+if( version == "Lua 5.2" ) { _ENV = null; }
+
+
+var any = m.P(1);
+
+
+// Pre-defined names
+var Predef = { nl = m.P("\n") };
+
+
+var mem;
+var fmem;
+var gmem;
+
+
+var function updatelocale () {
+  mm.locale(Predef);
+  Predef.a = Predef.alpha;
+  Predef.c = Predef.cntrl;
+  Predef.d = Predef.digit;
+  Predef.g = Predef.graph;
+  Predef.l = Predef.lower;
+  Predef.p = Predef.punct;
+  Predef.s = Predef.space;
+  Predef.u = Predef.upper;
+  Predef.w = Predef.alnum;
+  Predef.x = Predef.xdigit;
+  Predef.A = any - Predef.a;
+  Predef.C = any - Predef.c;
+  Predef.D = any - Predef.d;
+  Predef.G = any - Predef.g;
+  Predef.L = any - Predef.l;
+  Predef.P = any - Predef.p;
+  Predef.S = any - Predef.s;
+  Predef.U = any - Predef.u;
+  Predef.W = any - Predef.w;
+  Predef.X = any - Predef.x;
+  mem = {};    // restart memoization
+  fmem = {};
+  gmem = {};
+  var mt = {__mode = "v"};
+  setmetatable(mem, mt);
+  setmetatable(fmem, mt);
+  setmetatable(gmem, mt);
+}
+
+
+updatelocale();
+
+
+
+var I = m.P(function (s,i) { print(i, s->sub(1, i-1)); return i; });
+
+
+var function getdef (id, defs) {
+  var c = defs && defs[id];
+  if( ! c ) { error("undefined name: " .. id); }
+  return c;
+}
+
+
+var function patt_error (s, i) {
+  var msg = (#s < i + 20) && s->sub(i)
+                             || s->sub(i,i+20) .. "...";
+  msg = ("pattern error near '%s'")->format(msg);
+  error(msg, 2);
+}
+
+var function mult (p, n) {
+  var np = mm.P(true);
+  while( n >= 1 ) {
+    if( n%2 >= 1 ) { np *=   p; }
+    p *=   p;
+    n /= 2;
+  }
+  return np;
+}
+
+var function equalcap (s, i, c) {
+  if( type(c) != "string" ) { return null; }
+  var e = #c + i;
+  if( type(s) == 'function' ) {  // stream mode
+      if( s(i, e - 1) == c ) { return e; } else { return null; }
+  } else {
+      if( s->sub(i, e - 1) == c ) { return e; } else { return null; }
+  }
+}
+
+
+var S = (Predef.space + "--" * (any - Predef.nl)**0)**0;
+
+var name = m.R("AZ", "az", "__") * m.R("AZ", "az", "__", "09")**0;
+
+var arrow = S * "<-";
+
+var seq_follow = m.P("/") + ")" + "}" + ":}" + "~}" + "|}" + (name * arrow) + -1;
+
+name = m.C(name);
+
+
+// a defined name only have meaning in a given environment
+var Def = name * m.Carg(1);
+
+var num = m.C(m.R("09")**1) * S / tonumber;
+
+var String = "'" * m.C((any - "'")**0) * "'" +
+               '"' * m.C((any - '"')**0) * '"';
+
+
+var defined = "%" * Def / function (c,Defs) {
+  var cat =  Defs && Defs[c] || Predef[c];
+  if( ! cat ) { error ("name '" .. c .. "' undefined"); }
+  return cat;
+};
+
+var Range = m.Cs(any * (m.P("-")/"") * (any - "]")) / mm.R;
+
+var item = defined + Range + m.C(any);
+
+var Class =
+    "["
+  * (m.C(m.P("^")**-1))    // optional complement symbol
+  * m.Cf(item * (item - "]")**0, mt.__add) /
+                          function (c, p) { return c == "^" && any - p || p; }
+  * "]";
+
+var function adddef (t, k, exp) {
+  if( t[k] ) {
+    error("'"..k.."' already defined as a rule");
+  } else {
+    t[k] = exp;
+  }
+  return t;
+}
+
+var function firstdef (n, r) { return adddef({n}, n, r); }
+
+
+var function NT (n, b, p) {
+  if( ! b ) {
+    error("rule '"..n.."' used outside a grammar");
+  } else { return mm.V(n, p || 0);
+  }
+}
+
+
+var exp = m.P({ "Exp",
+  Exp = S * ( m.V("Grammar")
+            + m.Cf(m.V("Seq") * ("/" * S * m.V("Seq"))**0, mt.__add) );
+  Seq = m.Cf(m.Cc(m.P("")) * m.V("Prefix")**0 , mt.__mul)
+        * (#seq_follow + patt_error);
+  Prefix = "&" * S * m.V("Prefix") / mt.__len
+         + "!" * S * m.V("Prefix") / mt.__unm
+         + m.V("Suffix");
+  Suffix = m.Cf(m.V("Primary") * S *
+          ( ( m.P("+") * m.Cc(1, mt.__pow)
+            + m.P("*") * m.Cc(0, mt.__pow)
+            + m.P("?") * m.Cc(-1, mt.__pow)
+            + "^" * ( m.Cg(num * m.Cc(mult))
+                    + m.Cg(m.C(m.S("+-") * m.R("09")**1) * m.Cc(mt.__pow))
+                    )
+            + "->" * S * ( m.Cg((String + num) * m.Cc(mt.__div))
+                         + m.P("{}") * m.Cc(null, m.Ct)
+                         + m.Cg(Def / getdef * m.Cc(mt.__div))
+                         )
+            + "=>" * S * m.Cg(Def / getdef * m.Cc(m.Cmt))
+            ) * S
+          )**0, function (a,b,f) { return f(a,b); } );
+  Primary = "(" * m.V("Exp") * ")"
+            + String / mm.P
+            + Class
+            + defined
+            + "{:" * (name * ":" + m.Cc(null)) * m.V("Exp") * ":}" /
+                     function (n, p) { return mm.Cg(p, n); }
+            + "=" * name / function (n) { return mm.Cmt(mm.Cb(n), equalcap); }
+            + m.P("{}") / mm.Cp
+            + "{~" * m.V("Exp") * "~}" / mm.Cs
+            + "{|" * m.V("Exp") * "|}" / mm.Ct
+            + "{" * m.V("Exp") * "}" / mm.C
+            + m.P(".") * m.Cc(any)
+            + (name * m.Cb("G") * (S * ":" * S * num)**-1 * -arrow + "<" * name * m.Cb("G") * (S * ":" * S * num)**-1 * ">") / NT;
+  Definition = name * arrow * m.V("Exp");
+  Grammar = m.Cg(m.Cc(true), "G") *
+            m.Cf(m.V("Definition") / firstdef * m.Cg(m.V("Definition"))**0,
+              adddef) / mm.P
+});
+
+var pattern = S * m.Cg(m.Cc(false), "G") * exp / mm.P * (-any + patt_error);
+
+
+var function compile (p, defs) {
+  if( mm.type(p) == "pattern" ) { return p; }   // already compiled
+  var cp = pattern->match(p, 1, defs);
+  if( ! cp ) { error("incorrect pattern", 3); }
+  return cp;
+}
+
+var function match (s, p, i) {
+  var cp = mem[p];
+  if( ! cp ) {
+    cp = compile(p);
+    mem[p] = cp;
+  }
+  return cp->match(s, i || 1);
+}
+
+var function streammatch (p, i) {
+    var cp = mem[p];
+    if( ! cp ) {
+        cp = compile(p);
+        mem[p] = cp;
+    }
+    return cp->streammatch(i || 1);
+}
+
+// Only for testing purpose
+var function emulatestreammatch(s, p, i) {
+    var cp = mem[p];
+    if( ! cp ) {
+        cp = compile(p);
+        mem[p] = cp;
+    }
+    return cp->emulatestreammatch(s, i || 1);
+}
+
+var function find (s, p, i) {
+  var cp = fmem[p];
+  if( ! cp ) {
+    cp = compile(p) / 0;
+    cp = mm.P({ mm.Cp() * cp * mm.Cp() + 1 * mm.V(1) });
+    fmem[p] = cp;
+  }
+  var e;
+  i, e = cp->match(s, i || 1);
+  if( i ) { return i, e - 1;
+  } else { return i;
+  }
+}
+
+var function gsub (s, p, rep) {
+  var g = gmem[p] || {};   // ensure gmem[p] is not collected while here
+  gmem[p] = g;
+  var cp = g[rep];
+  if( ! cp ) {
+    cp = compile(p);
+    cp = mm.Cs((cp / rep + 1)**0);
+    g[rep] = cp;
+  }
+  return cp->match(s);
+}
+
+
+// exported names
+var re = {
+  compile = compile,
+  match = match,
+  streammatch = streammatch,
+  emulatestreammatch = emulatestreammatch,
+  find = find,
+  gsub = gsub,
+  updatelocale = updatelocale,
+};
+
+if( version == "Lua 5.1" ) { _G.re = re; }
+
+return re;
